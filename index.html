@@ -275,6 +275,8 @@ footer{background:var(--paper2);border-top:1.5px solid var(--rule);padding:10px 
       <div class="map-field"><label>Topográfico (Dewey) *</label><select id="map-topo"></select></div>
       <div class="map-field"><label>Año de publicación *</label><select id="map-year"></select></div>
       <div class="map-field"><label>Carrera / Unidad</label><select id="map-unit"></select></div>
+      <div class="map-field"><label>Título</label><select id="map-titulo"></select></div>
+      <div class="map-field"><label>Autor</label><select id="map-autor"></select></div>
     </div>
   </div>
   <div id="map-loans" class="map-panel loans-panel">
@@ -589,11 +591,13 @@ function buildLoansMapForUnit(unitCode){
 function populateColMaps(){
   const none='<option value="">— no usar —</option>';
   const opts=colCols.map(c=>`<option value="${c}">${c}</option>`).join('');
-  ['map-topo','map-year','map-unit'].forEach(id=>document.getElementById(id).innerHTML=none+opts);
+  ['map-topo','map-year','map-unit','map-titulo','map-autor'].forEach(id=>document.getElementById(id).innerHTML=none+opts);
   const norm=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
   const auto={'map-topo':['topografico','signatura','dewey','clasificacion','cota'],
     'map-year':['ano de publicacion','ano publicacion','ano','year','pub_year','fecha'],
-    'map-unit':['unidad_academica','unidad academica','carrera','programa','escuela','unit']};
+    'map-unit':['unidad_academica','unidad academica','carrera','programa','escuela','unit'],
+    'map-titulo':['titulo','title'],
+    'map-autor':['autor','author']};
   for(const [id,cands] of Object.entries(auto)){
     const el=document.getElementById(id);
     const match=colCols.find(c=>cands.some(k=>norm(c).includes(k)));
@@ -666,17 +670,20 @@ function analyzeRows(rows, unitCode=null){
   }
   // Build title-level data (group by signatura)
   const titleGroups={};
+  const tituloCol=document.getElementById('map-titulo').value;
+  const autorCol=document.getElementById('map-autor').value;
   for(const row of rows){
     const topoCol2=document.getElementById('map-topo').value;
     const yearCol2=document.getElementById('map-year').value;
     const sig=String(row[topoCol2]||'').trim();if(!sig)continue;
     const yr=parseFloat(String(row[yearCol2]).replace(/\D/g,''));
     if(!titleGroups[sig]){
-      const titulo=String(row['Titulo']||row['título']||row['Título']||row['TITULO']||'—').trim();
+      const titulo=String((tituloCol&&row[tituloCol])||row['Titulo']||row['título']||row['Título']||row['TITULO']||'—').trim();
+      const autor=String((autorCol&&row[autorCol])||row['Autor']||row['autor']||row['AUTOR']||'—').trim();
       titleGroups[sig]={
         sig,
         titulo,
-        autor:String(row['Autor']||row['autor']||row['AUTOR']||'—').trim(),
+        autor,
         year:isNaN(yr)?null:yr,
         copies:0,
         dewey:null,
