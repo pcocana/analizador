@@ -332,24 +332,24 @@ Cada fila del archivo de préstamos equivale a 1 uso (préstamo o renovación). 
 <script>
 /* ============================================================
    ANALIZADOR DE COLECCIÓN BIBLIOGRÁFICA · BIBLIOTECA PUCV
-   Versión completa: análisis + gráficos + comparación + export PNG/ZIP
+   Versión final con todos los fixes aplicados
    ============================================================ */
 const CY=new Date().getFullYear();
 const MAX_FILE_SIZE=50*1024*1024;
 
-/* ---------- Utilidades ---------- */
+/* ---------- Utilidades de seguridad ---------- */
 function esc(s){
     if(s===null||s===undefined)return'';
     return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function idSafe(s){return String(s).replace(/[^a-zA-Z0-9_-]/g,'_')}
 function fileSafe(s){return String(s).replace(/[\\/:*?"<>|]/g,'_').trim()}
+function escCsv(s){return '"'+String(s).replace(/"/g,'""')+'"'}
 
 /* ---------- Configuración de Chart.js ---------- */
 if(typeof Chart!=='undefined'){
     Chart.defaults.devicePixelRatio=2;
     Chart.defaults.font.family="'DM Sans',sans-serif";
-    // Plugin: fondo blanco para que los PNG exportados sean aptos para presentaciones
     const whiteBg={id:'whiteBg',beforeDraw:(chart)=>{
         const ctx=chart.ctx;ctx.save();
         ctx.globalCompositeOperation='destination-over';
@@ -404,7 +404,7 @@ function getHLRef(c){return HALFLIFE_REF[c]||(HALFLIFE_REF[c[0]+'00'])||10}
 /* ---------- Detección de idioma ---------- */
 const ES_MARKERS=/[ñÑáéíóúÁÉÍÓÚü¿¡]/;
 const ES_STOP=new Set(['de','la','el','en','y','los','las','un','una','unas','unos','para','del','con','su','al','es','como','más','por','se','no','lo','sus','entre','sobre','hacia','desde','este','esta','estos','estas','sin','o','u','e','que','le','les','muy','ya','fue','ser','son','han','está','están','nuevo','nueva','curso','manual','introducción','teoría','tomo','edición']);
-const EN_STOP=new Set(['the','of','and','in','to','a','is','for','with','on','an','as','by','from','that','this','these','those','are','at','be','or','its','into','their','was','were','will','can','which','it','not','have','has','handbook','introduction','theory','principles','fundamentals','guide','algorithm','method','analysis','system','data','computing']);
+const EN_STOP=new Set(['the','of','and','in','to','a','is','for','with','on','an','as','by','from','that','this','these','those','are','at','be','or','its','into','their','was','were','will','can','which','it','not','have','has','handbook','introduction','theory','principles','fundamentals','guide','algorithm','method','analysis','system','data','computing','engineering']);
 const EN_SUFFIX=/(ing|tion|sion|ment|ology|ics|ware|ship|ness|able)$/;
 const ES_SUFFIX=/(ción|sión|dad|miento|ncia|logía|aje|ismo|ería|oso|osa|able|ible)$/;
 function detectLanguage(titulo){
@@ -711,17 +711,18 @@ function buildTabs(){
 const bar=document.getElementById('tabs-bar'),cont=document.getElementById('tabs-content');
 bar.innerHTML='';cont.innerHTML='';
 Object.keys(allResults).forEach((code,i)=>{
+const sc=idSafe(code);
 const tab=document.createElement('button');
 tab.className='tab'+(i===0?' active':'');tab.textContent=code;
 tab.addEventListener('click',()=>{
 document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
 document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
 tab.classList.add('active');
-document.getElementById('tp-'+idSafe(code)).classList.add('active');
+document.getElementById('tp-'+sc).classList.add('active');
 });
 bar.appendChild(tab);
 const panel=document.createElement('div');
-panel.className='tab-panel'+(i===0?' active':'');panel.id='tp-'+idSafe(code);
+panel.className='tab-panel'+(i===0?' active':'');panel.id='tp-'+sc;
 panel.innerHTML=panelHTML(code,allResults[code]);
 cont.appendChild(panel);
 wirePanel(code,allResults[code]);
@@ -1176,7 +1177,7 @@ if(p3.length){const ws=XLSX.utils.aoa_to_sheet([['P3 — Revisar: candidatos a d
 const wsAll=XLSX.utils.aoa_to_sheet([['Todos los títulos — '+code],['Generado: '+now],[],TH,...titleRows(titles)]);
 wsAll['!cols']=colW;
 XLSX.utils.book_append_sheet(wb,wsAll,'Todos los títulos');
-XLSX.writeFile(wb,`Informe_Presupuestario_${code}_${new Date().getFullYear()}.xlsx`);
+XLSX.writeFile(wb,`Informe_Presupuestario_${fileSafe(code)}_${new Date().getFullYear()}.xlsx`);
 }
 function buildSheets(code,data){
 const h1=['Código Dewey','Materia','N Ejemplares','Año mín','Año máx','Mediana','Promedio','Corte','% ant. corte','Estado','Semivida (años)','I. Obsolescencia','% Inglés',...(hasLoans?['Préstamos totales','Ítems prestados','Tasa circulación','% ítems prestados','Decisión']:[])];
@@ -1213,19 +1214,19 @@ const{ws1,ws2,wsC}=buildSheets(code,data);
 XLSX.utils.book_append_sheet(wb,ws1,'Análisis por Materia');
 XLSX.utils.book_append_sheet(wb,ws2,'Por Década');
 XLSX.utils.book_append_sheet(wb,wsC,'Criterios');
-XLSX.writeFile(wb,`Coleccion_${code}_${CY}.xlsx`);
+XLSX.writeFile(wb,`Coleccion_${fileSafe(code)}_${CY}.xlsx`);
 }
 function dlCSV(code,data){
 const h=['Carrera','Dewey','Materia','N','Anio_min','Anio_max','Mediana','Corte','Pct_ant_corte','Estado','Semivida_anios','I_Obsolescencia','Pct_ingles',...(hasLoans?['Prestamos','Items_prestados','Tasa_circ','Pct_prestados','Decision']:[])];
 const rows=data.map(r=>{
 const e=r.pct===null?'Sin dato':r.pct<=30?'Actualizado':r.pct<=70?'Moderado':'Desactualizado';
 const qd=hasLoans?getQuadrant(r):null;
-return[code,r.dewey,`"${String(r.materia).replace(/"/g,'""')}"`,r.n,r.yMin||'',r.yMax||'',r.med||'',r.corte,r.pct!==null?r.pct.toFixed(1):'',e,r.hl!==null?r.hl:'',r.iObs!==null?r.iObs.toFixed(1):'',r.pctIngles!==null?r.pctIngles.toFixed(1):'',...(hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?r.circRate.toFixed(2):'',r.pctBorrowed!==null?r.pctBorrowed.toFixed(1):'',qd?qd.label.replace(/[🔴🟢🟡🔵]/g,'').trim():'']:[] )];
+return[code,r.dewey,escCsv(r.materia),r.n,r.yMin||'',r.yMax||'',r.med||'',r.corte,r.pct!==null?r.pct.toFixed(1):'',e,r.hl!==null?r.hl:'',r.iObs!==null?r.iObs.toFixed(1):'',r.pctIngles!==null?r.pctIngles.toFixed(1):'',...(hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?r.circRate.toFixed(2):'',r.pctBorrowed!==null?r.pctBorrowed.toFixed(1):'',qd?qd.label.replace(/[🔴🟢🟡🔵]/g,'').trim():'']:[] )];
 });
 const csv=[h,...rows].map(r=>r.join(',')).join('\n');
 const a=document.createElement('a');
 a.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));
-a.download=`Coleccion_${code}.csv`;a.click();
+a.download=`Coleccion_${fileSafe(code)}.csv`;a.click();
 }
 document.getElementById('dl-all-excel').addEventListener('click',()=>{
 const title=document.getElementById('report-title').value.trim()||'Colecciones';
@@ -1266,7 +1267,7 @@ for(const[code,data]of Object.entries(allResults)){
 for(const r of data){
 const e=r.pct===null?'Sin dato':r.pct<=30?'Actualizado':r.pct<=70?'Moderado':'Desactualizado';
 const qd=hasLoans?getQuadrant(r):null;
-rows.push([code,r.dewey,`"${String(r.materia).replace(/"/g,'""')}"`,r.n,r.yMin||'',r.yMax||'',r.med||'',r.corte,r.pct!==null?r.pct.toFixed(1):'',e,r.hl!==null?r.hl:'',r.iObs!==null?r.iObs.toFixed(1):'',r.pctIngles!==null?r.pctIngles.toFixed(1):'',...(hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?r.circRate.toFixed(2):'',r.pctBorrowed!==null?r.pctBorrowed.toFixed(1):'',qd?qd.label.replace(/[🔴🟢🟡🔵]/g,'').trim():'']:[] )]);
+rows.push([code,r.dewey,escCsv(r.materia),r.n,r.yMin||'',r.yMax||'',r.med||'',r.corte,r.pct!==null?r.pct.toFixed(1):'',e,r.hl!==null?r.hl:'',r.iObs!==null?r.iObs.toFixed(1):'',r.pctIngles!==null?r.pctIngles.toFixed(1):'',...(hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?r.circRate.toFixed(2):'',r.pctBorrowed!==null?r.pctBorrowed.toFixed(1):'',qd?qd.label.replace(/[🔴🟢🟡🔵]/g,'').trim():'']:[] )]);
 }
 }
 const csv=[h,...rows].map(r=>r.join(',')).join('\n');
