@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 :root{
 --ink:#0f1923;--ink2:#3a4a5c;--ink3:#7a8fa6;
@@ -171,7 +172,6 @@ td.td-hl{background:#faf5ff}
 .title-filter-row{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
 .title-filter-row select,.title-filter-row input{padding:5px 9px;border:1.5px solid var(--rule);border-radius:5px;font-size:12px;font-family:'DM Sans',sans-serif;background:#fff;color:var(--ink)}
 .title-filter-row select:focus,.title-filter-row input:focus{outline:none;border-color:var(--accent)}
-/* Charts */
 .charts-section{margin-top:16px;border-top:2px solid var(--rule);padding-top:14px}
 .charts-toggle{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--paper2);border:1.5px solid var(--rule);border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;color:var(--ink2);width:100%;text-align:left;transition:background .15s}
 .charts-toggle:hover{background:var(--rule)}
@@ -179,11 +179,15 @@ td.td-hl{background:#faf5ff}
 .charts-toggle.open .ct-arrow{transform:rotate(90deg)}
 .charts-content{display:none;margin-top:12px}
 .charts-content.open{display:block}
+.charts-actions{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.charts-actions .dl-btn{padding:7px 14px;font-size:12px}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
 .chart-card{background:#fff;border:1.5px solid var(--rule);border-radius:9px;padding:16px}
-.chart-card h4{font-family:'Playfair Display',serif;font-size:13px;margin-bottom:10px;color:var(--ink2)}
+.chart-card h4{font-family:'Playfair Display',serif;font-size:13px;margin-bottom:10px;color:var(--ink2);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.chart-card h4 span{flex:1}
 .chart-card canvas{max-height:280px}
-/* Comparison */
+.chart-dl-btn{padding:4px 10px;background:var(--paper);border:1.5px solid var(--rule);border-radius:5px;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s;display:inline-flex;align-items:center;gap:4px;flex-shrink:0}
+.chart-dl-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
 .comparison-section{margin-top:22px;padding-top:20px;border-top:2px solid var(--rule)}
 .comparison-header{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
 .comparison-header h3{font-family:'Playfair Display',serif;font-size:15px}
@@ -223,7 +227,7 @@ footer{background:var(--paper2);border-top:1.5px solid var(--rule);padding:10px 
 </div>
 <div class="cfg-field">
 <label>Año de corte por defecto <span style="color:var(--ink3);font-weight:400">(clases sin regla específica)</span></label>
-<input type="number" id="corte-default" value="2013" min="1950" max="2030">
+<input type="number" id="corte-default" value="2013" min="1950" max="2031">
 </div>
 </div>
 <div class="slabel">Años de corte por área disciplinar</div>
@@ -316,6 +320,7 @@ Cada fila del archivo de préstamos equivale a 1 uso (préstamo o renovación). 
 <div class="dl-row">
 <button class="dl-btn m" id="dl-all-excel">📊 Excel completo — todas las carreras</button>
 <button class="dl-btn s" id="dl-all-csv">📄 CSV consolidado</button>
+<button class="dl-btn p" id="dl-all-charts">🖼️ Todos los gráficos (ZIP)</button>
 </div>
 </div>
 </div>
@@ -326,62 +331,44 @@ Cada fila del archivo de préstamos equivale a 1 uso (préstamo o renovación). 
 </footer>
 <script>
 /* ============================================================
-   ANALIZADOR DE COLECCIÓN BIBLIOGRÁFICA - VERSIÓN COMPLETA
+   ANALIZADOR DE COLECCIÓN BIBLIOGRÁFICA · BIBLIOTECA PUCV
+   Versión completa: análisis + gráficos + comparación + export PNG/ZIP
    ============================================================ */
 const CY=new Date().getFullYear();
 const MAX_FILE_SIZE=50*1024*1024;
 
+/* ---------- Utilidades ---------- */
 function esc(s){
     if(s===null||s===undefined)return'';
     return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+function idSafe(s){return String(s).replace(/[^a-zA-Z0-9_-]/g,'_')}
+function fileSafe(s){return String(s).replace(/[\\/:*?"<>|]/g,'_').trim()}
 
-/* ---------- DEWEY LABELS ---------- */
+/* ---------- Configuración de Chart.js ---------- */
+if(typeof Chart!=='undefined'){
+    Chart.defaults.devicePixelRatio=2;
+    Chart.defaults.font.family="'DM Sans',sans-serif";
+    // Plugin: fondo blanco para que los PNG exportados sean aptos para presentaciones
+    const whiteBg={id:'whiteBg',beforeDraw:(chart)=>{
+        const ctx=chart.ctx;ctx.save();
+        ctx.globalCompositeOperation='destination-over';
+        ctx.fillStyle='#ffffff';
+        ctx.fillRect(0,0,chart.width,chart.height);
+        ctx.restore();
+    }};
+    Chart.register(whiteBg);
+}
+const chartInstances={};
+const CHART_NAMES={status:'01_Estado_Actualizacion',decades:'02_Distribucion_Decadas',top:'03_Top_10_Materias',quad:'04_Cuadrantes_Decision'};
+const COMP_CHART_NAMES={pct:'Comparacion_Pct_Desactualizado',hl:'Comparacion_Semivida'};
+
+/* ---------- Dewey labels ---------- */
 const DEWEY={
-'000':'Ciencias de la información','001':'Metodología y conocimiento',
-'002':'El libro','003':'Sistemas','004':'Procesamiento de datos',
-'005':'Programación y software','006':'IA y multimedia',
-'010':'Bibliografías','020':'Bibliotecología','070':'Documentación',
-'100':'Filosofía','150':'Psicología','153':'Psicología cognitiva',
-'160':'Lógica','170':'Ética','200':'Religión',
-'300':'Ciencias sociales','301':'Sociología','302':'Interacción social',
-'303':'Procesos sociales','306':'Cultura e instituciones','310':'Estadística',
-'320':'Ciencia política','330':'Economía','331':'Economía del trabajo',
-'332':'Economía financiera','336':'Finanzas públicas','338':'Producción',
-'340':'Derecho','341':'D. internacional','342':'D. constitucional',
-'343':'D. tributario','344':'D. laboral','345':'D. penal',
-'346':'D. privado','347':'D. procesal','350':'Adm. pública',
-'360':'Servicios sociales','370':'Educación','371':'Instituciones educativas',
-'372':'Educación primaria','378':'Educación superior',
-'380':'Comercio y comunicaciones','384':'Telecomunicaciones',
-'390':'Costumbres','400':'Lingüística','401':'Filosofía del lenguaje',
-'410':'Lingüística aplicada','420':'Inglés','460':'Español',
-'500':'Ciencias naturales','510':'Matemáticas','511':'Fundamentos mat.',
-'512':'Álgebra','513':'Aritmética','514':'Topología',
-'515':'Análisis / Cálculo','516':'Geometría','518':'Métodos numéricos',
-'519':'Probabilidad y estadística','520':'Astronomía',
-'530':'Física','531':'Mecánica clásica','532':'Mecánica de fluidos',
-'535':'Óptica','536':'Termodinámica','537':'Electricidad y electrónica',
-'540':'Química','541':'Química física','546':'Química inorgánica','547':'Química orgánica',
-'550':'Ciencias de la Tierra','551':'Geología','560':'Paleontología',
-'570':'Biología','572':'Bioquímica','576':'Genética','577':'Ecología',
-'580':'Plantas','590':'Animales',
-'600':'Tecnología','607':'Educación en tecnología',
-'610':'Medicina y salud','620':'Ingeniería','621':'Ing. mecánica / eléctrica',
-'622':'Minería','624':'Ing. civil','625':'Ing. de transporte',
-'627':'Hidráulica','628':'Ing. ambiental','629':'Otras ingenierías',
-'630':'Agricultura','650':'Gestión y administración',
-'657':'Contabilidad','658':'Gestión empresarial',
-'660':'Ing. química','669':'Metalurgia','670':'Manufactura','690':'Construcción',
-'700':'Artes','720':'Arquitectura','740':'Diseño','750':'Pintura',
-'780':'Música','790':'Deportes',
-'800':'Literatura','860':'Literatura española',
-'900':'Historia y Geografía','910':'Geografía','920':'Biografías',
-'940':'Historia de Europa','980':'Historia de América del Sur',
-};
+'000':'Ciencias de la información','001':'Metodología y conocimiento','002':'El libro','003':'Sistemas','004':'Procesamiento de datos','005':'Programación y software','006':'IA y multimedia','010':'Bibliografías','020':'Bibliotecología','070':'Documentación','100':'Filosofía','150':'Psicología','153':'Psicología cognitiva','160':'Lógica','170':'Ética','200':'Religión','300':'Ciencias sociales','301':'Sociología','302':'Interacción social','303':'Procesos sociales','306':'Cultura e instituciones','310':'Estadística','320':'Ciencia política','330':'Economía','331':'Economía del trabajo','332':'Economía financiera','336':'Finanzas públicas','338':'Producción','340':'Derecho','341':'D. internacional','342':'D. constitucional','343':'D. tributario','344':'D. laboral','345':'D. penal','346':'D. privado','347':'D. procesal','350':'Adm. pública','360':'Servicios sociales','370':'Educación','371':'Instituciones educativas','372':'Educación primaria','378':'Educación superior','380':'Comercio y comunicaciones','384':'Telecomunicaciones','390':'Costumbres','400':'Lingüística','401':'Filosofía del lenguaje','410':'Lingüística aplicada','420':'Inglés','460':'Español','500':'Ciencias naturales','510':'Matemáticas','511':'Fundamentos mat.','512':'Álgebra','513':'Aritmética','514':'Topología','515':'Análisis / Cálculo','516':'Geometría','518':'Métodos numéricos','519':'Probabilidad y estadística','520':'Astronomía','530':'Física','531':'Mecánica clásica','532':'Mecánica de fluidos','535':'Óptica','536':'Termodinámica','537':'Electricidad y electrónica','540':'Química','541':'Química física','546':'Química inorgánica','547':'Química orgánica','550':'Ciencias de la Tierra','551':'Geología','560':'Paleontología','570':'Biología','572':'Bioquímica','576':'Genética','577':'Ecología','580':'Plantas','590':'Animales','600':'Tecnología','607':'Educación en tecnología','610':'Medicina y salud','620':'Ingeniería','621':'Ing. mecánica / eléctrica','622':'Minería','624':'Ing. civil','625':'Ing. de transporte','627':'Hidráulica','628':'Ing. ambiental','629':'Otras ingenierías','630':'Agricultura','650':'Gestión y administración','657':'Contabilidad','658':'Gestión empresarial','660':'Ing. química','669':'Metalurgia','670':'Manufactura','690':'Construcción','700':'Artes','720':'Arquitectura','740':'Diseño','750':'Pintura','780':'Música','790':'Deportes','800':'Literatura','860':'Literatura española','900':'Historia y Geografía','910':'Geografía','920':'Biografías','940':'Historia de Europa','980':'Historia de América del Sur'};
 function dlabel(c){if(DEWEY[c])return DEWEY[c];const d=c[0]+'00';return DEWEY[d]?DEWEY[d]+' (div.)':'Dewey '+c}
 
-/* ---------- CUTOFF RULES ---------- */
+/* ---------- Cutoff rules ---------- */
 const DEFAULT_CUTOFFS=[
 {from:0,to:6,label:'000–006',desc:'Computación, IA, software',year:2019,why:'Obsolescencia en 3–5 años'},
 {from:7,to:99,label:'007–099',desc:'Información, documentación',year:2014,why:'Semivida media'},
@@ -395,7 +382,7 @@ const DEFAULT_CUTOFFS=[
 {from:350,to:399,label:'350–399',desc:'Adm. pública, educación',year:2012,why:'Semivida media'},
 {from:400,to:499,label:'400–499',desc:'Lengua y lingüística',year:2008,why:'Semivida larga'},
 {from:500,to:509,label:'500–509',desc:'Ciencias naturales (General)',year:2012,why:'Semivida media'},
-{from:510,to:519,label:'510–519',desc:'Matemáticas y estadística',year:2010,why:'Fundamentos estables'},
+{from:510,to:519,label:'510–519',desc:'Matemáticas y estadística',year:2010,why:'Fundamentos estables; textos clásicos vigentes'},
 {from:520,to:529,label:'520–529',desc:'Astronomía',year:2013,why:'Semivida media'},
 {from:530,to:539,label:'530–539',desc:'Física',year:2013,why:'Semivida media'},
 {from:540,to:549,label:'540–549',desc:'Química',year:2013,why:'Semivida media'},
@@ -410,24 +397,14 @@ const DEFAULT_CUTOFFS=[
 {from:670,to:699,label:'670–699',desc:'Manufactura, construcción',year:2012,why:'Normas constructivas'},
 {from:700,to:799,label:'700–799',desc:'Artes',year:2008,why:'Semivida larga'},
 {from:800,to:899,label:'800–899',desc:'Literatura',year:2000,why:'Obras permanentes'},
-{from:900,to:999,label:'900–999',desc:'Historia y Geografía',year:2000,why:'Semivida muy larga'},
-];
-const HALFLIFE_REF={
-'000':5,'001':8,'003':8,'004':5,'005':5,'006':4,
-'100':15,'150':12,'160':15,'170':15,'200':20,
-'300':10,'310':8,'320':10,'330':10,'340':7,'350':10,'360':10,'370':12,'380':10,
-'400':15,'500':10,'510':15,'511':15,'512':15,'513':15,'514':15,'515':15,'516':15,'518':10,'519':10,
-'520':10,'530':12,'536':12,'537':8,'540':10,'550':12,'560':15,'570':10,'572':8,'577':10,
-'600':8,'610':7,'620':10,'621':8,'622':12,'624':10,'628':10,'629':8,
-'630':10,'650':10,'657':10,'658':10,'660':10,'669':12,'670':12,'690':12,
-'700':20,'800':25,'900':25,
-};
+{from:900,to:999,label:'900–999',desc:'Historia y Geografía',year:2000,why:'Semivida muy larga'}];
+const HALFLIFE_REF={'000':5,'001':8,'003':8,'004':5,'005':5,'006':4,'100':15,'150':12,'160':15,'170':15,'200':20,'300':10,'310':8,'320':10,'330':10,'340':7,'350':10,'360':10,'370':12,'380':10,'400':15,'500':10,'510':15,'511':15,'512':15,'513':15,'514':15,'515':15,'516':15,'518':10,'519':10,'520':10,'530':12,'536':12,'537':8,'540':10,'550':12,'560':15,'570':10,'572':8,'577':10,'600':8,'610':7,'620':10,'621':8,'622':12,'624':10,'628':10,'629':8,'630':10,'650':10,'657':10,'658':10,'660':10,'669':12,'670':12,'690':12,'700':20,'800':25,'900':25};
 function getHLRef(c){return HALFLIFE_REF[c]||(HALFLIFE_REF[c[0]+'00'])||10}
 
-/* ---------- LANGUAGE DETECTION ---------- */
+/* ---------- Detección de idioma ---------- */
 const ES_MARKERS=/[ñÑáéíóúÁÉÍÓÚü¿¡]/;
 const ES_STOP=new Set(['de','la','el','en','y','los','las','un','una','unas','unos','para','del','con','su','al','es','como','más','por','se','no','lo','sus','entre','sobre','hacia','desde','este','esta','estos','estas','sin','o','u','e','que','le','les','muy','ya','fue','ser','son','han','está','están','nuevo','nueva','curso','manual','introducción','teoría','tomo','edición']);
-const EN_STOP=new Set(['the','of','and','in','to','a','is','for','with','on','an','as','by','from','that','this','these','those','are','at','be','or','its','into','their','was','were','will','can','which','it','not','have','has','handbook','introduction','theory','principles','fundamentals','guide','algorithm','theorem','proof','equation','matrix','vector','function','derivative','integral','hypothesis','analysis','method','model','system','structure','data','network','process','application','design','engineering','computing']);
+const EN_STOP=new Set(['the','of','and','in','to','a','is','for','with','on','an','as','by','from','that','this','these','those','are','at','be','or','its','into','their','was','were','will','can','which','it','not','have','has','handbook','introduction','theory','principles','fundamentals','guide','algorithm','method','analysis','system','data','computing']);
 const EN_SUFFIX=/(ing|tion|sion|ment|ology|ics|ware|ship|ness|able)$/;
 const ES_SUFFIX=/(ción|sión|dad|miento|ncia|logía|aje|ismo|ería|oso|osa|able|ible)$/;
 function detectLanguage(titulo){
@@ -438,116 +415,74 @@ const words=t.replace(/[^a-zà-ÿ\s]/gi,' ').split(/\s+/).filter(Boolean);
 if(words.length<2)return'Indet.';
 let esHits=0,enHits=0;
 for(const w of words){if(ES_STOP.has(w))esHits++;if(EN_STOP.has(w))enHits++;}
-if(esHits===0&&enHits===0){
-for(const w of words){if(EN_SUFFIX.test(w))enHits++;if(ES_SUFFIX.test(w))esHits++;}
-}
+if(esHits===0&&enHits===0){for(const w of words){if(EN_SUFFIX.test(w))enHits++;if(ES_SUFFIX.test(w))esHits++;}}
 if(esHits===0&&enHits===0)return'Indet.';
 if(enHits>esHits)return'EN';
 if(esHits>enHits)return'ES';
 return'Indet.';
 }
 
-/* ---------- STATE ---------- */
+/* ---------- Estado ---------- */
 let cutoffRules=JSON.parse(JSON.stringify(DEFAULT_CUTOFFS));
-
-function yearColor(y){
-    const diff=CY-y;
-    if(diff<=3)return'#2e7d32';
-    if(diff<=8)return'#f9a825';
-    if(diff<=15)return'#ef6c00';
-    return'#c62828';
-}
+function yearColor(y){const diff=CY-y;if(diff<=3)return'#2e7d32';if(diff<=8)return'#f9a825';if(diff<=15)return'#ef6c00';return'#c62828'}
 
 function buildCutoffGrid(){
-const g=document.getElementById('cutoff-grid');
-if(!g)return;
+const g=document.getElementById('cutoff-grid');if(!g)return;
 g.innerHTML='';
 cutoffRules.forEach((r,i)=>{
 const row=document.createElement('div');row.className='cutoff-row';
-row.innerHTML=`<span class="cutoff-range">${esc(r.label)}</span>
-<span class="cutoff-desc" title="${esc(r.why)}">${esc(r.desc)}</span>
-<input class="cutoff-year" type="number" value="${r.year}" min="1950" max="${CY+5}" data-idx="${i}"
-style="border-color:${yearColor(r.year)};color:${yearColor(r.year)}">`;
+row.innerHTML=`<span class="cutoff-range">${esc(r.label)}</span><span class="cutoff-desc" title="${esc(r.why)}">${esc(r.desc)}</span><input class="cutoff-year" type="number" value="${r.year}" min="1950" max="${CY+5}" data-idx="${i}" style="border-color:${yearColor(r.year)};color:${yearColor(r.year)}">`;
 g.appendChild(row);
 });
 g.querySelectorAll('.cutoff-year').forEach(inp=>inp.addEventListener('change',function(){
-    const v=+this.value;
-    if(v<1950||v>CY+5){
-        this.classList.add('invalid');
-        showAlert(`Año inválido (${v}). Debe estar entre 1950 y ${CY+5}.`,'error');
-        return;
-    }
-    this.classList.remove('invalid');
-    cutoffRules[+this.dataset.idx].year=v;
-    this.style.borderColor=yearColor(v);this.style.color=yearColor(v);
+const v=+this.value;
+if(v<1950||v>CY+5){this.classList.add('invalid');showAlert(`Año inválido (${v}). Debe estar entre 1950 y ${CY+5}.`,'error');return}
+this.classList.remove('invalid');
+cutoffRules[+this.dataset.idx].year=v;
+this.style.borderColor=yearColor(v);this.style.color=yearColor(v);
 }));
 }
-
 function resetCutoffs(){
-    if(!confirm('¿Restaurar los valores recomendados por ALA/ACRL? Se perderán tus modificaciones.'))return;
-    cutoffRules=JSON.parse(JSON.stringify(DEFAULT_CUTOFFS));
-    buildCutoffGrid();
-    showAlert('Valores restaurados.','success');
+if(!confirm('¿Restaurar los valores recomendados por ALA/ACRL? Se perderán tus modificaciones.'))return;
+cutoffRules=JSON.parse(JSON.stringify(DEFAULT_CUTOFFS));
+buildCutoffGrid();showAlert('Valores restaurados.','success');
 }
-
 function getCutoff(code){const n=parseInt(code);const r=cutoffRules.find(r=>n>=r.from&&n<=r.to);return r?r.year:parseInt(document.getElementById('corte-default').value)||2013}
 
-/* ---------- METRICS ---------- */
-function calcHalfLife(yrs){
-if(yrs.length<4)return null;
-const s=[...yrs].sort((a,b)=>b-a);
-return CY-s[Math.ceil(s.length/2)-1];
-}
-function calcIObs(yrs,code){
-if(!yrs.length)return null;
-const ref=getHLRef(code);
-return(yrs.filter(y=>y<CY-ref).length/yrs.length)*100;
-}
+function calcHalfLife(yrs){if(yrs.length<4)return null;const s=[...yrs].sort((a,b)=>b-a);return CY-s[Math.ceil(s.length/2)-1]}
+function calcIObs(yrs,code){if(!yrs.length)return null;const ref=getHLRef(code);return(yrs.filter(y=>y<CY-ref).length/yrs.length)*100}
 
-/* ---------- GLOBAL STATE ---------- */
 let colData=[],colCols=[],hasLoans=false;
 let selCareers=new Set(),allResults={};
 const DECADAS=[1960,1970,1980,1990,2000,2010,2020];
-let circThreshold=0;
-let loansRawJson=[];
-const chartInstances={};
+let circThreshold=0,loansRawJson=[];
 
-/* ---------- FILE LOADING ---------- */
+/* ---------- Carga de archivos ---------- */
 function setupDrop(dzId,fiId,hintId,onFile){
-const dz=document.getElementById(dzId);
-const fi=document.getElementById(fiId);
-if(!dz||!fi){console.error('Drop zone missing:',dzId);return;}
+const dz=document.getElementById(dzId),fi=document.getElementById(fiId);
+if(!dz||!fi)return;
 dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over')});
 dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
 dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');if(e.dataTransfer.files[0])onFile(e.dataTransfer.files[0],hintId,dzId)});
 fi.addEventListener('change',e=>{if(e.target.files[0])onFile(e.target.files[0],hintId,dzId)});
-dz.addEventListener('click',e=>{if(e.target.tagName!=='INPUT')fi.click()});
+dz.addEventListener('click',e=>{if(e.target.tagName!=='INPUT'&&e.target.tagName!=='LABEL')fi.click()});
 }
-
 function readXLSX(file,cb){
-    if(!file){cb(new Error('No se seleccionó archivo'));return}
-    if(file.size>MAX_FILE_SIZE){
-        cb(new Error(`Archivo demasiado grande (${(file.size/1024/1024).toFixed(1)} MB). Máximo: 50 MB.`));
-        return;
-    }
-    const r=new FileReader();
-    r.onload=e=>{
-        try{
-            const wb=XLSX.read(e.target.result,{type:'array'});
-            if(!wb.SheetNames||!wb.SheetNames.length){cb(new Error('El archivo no contiene hojas'));return}
-            const ws=wb.Sheets[wb.SheetNames[0]];
-            const json=XLSX.utils.sheet_to_json(ws,{defval:''});
-            if(!json||!json.length){cb(new Error('La hoja está vacía'));return}
-            cb(null,json);
-        }catch(err){
-            cb(new Error('Error al leer: '+(err.message||'archivo corrupto')));
-        }
-    };
-    r.onerror=()=>cb(new Error('No se pudo leer el archivo'));
-    r.readAsArrayBuffer(file);
+if(!file){cb(new Error('No se seleccionó archivo'));return}
+if(file.size>MAX_FILE_SIZE){cb(new Error(`Archivo demasiado grande (${(file.size/1024/1024).toFixed(1)} MB). Máximo: 50 MB.`));return}
+const r=new FileReader();
+r.onload=e=>{try{
+const wb=XLSX.read(e.target.result,{type:'array'});
+if(!wb.SheetNames||!wb.SheetNames.length){cb(new Error('El archivo no contiene hojas'));return}
+const ws=wb.Sheets[wb.SheetNames[0]];
+const json=XLSX.utils.sheet_to_json(ws,{defval:''});
+if(!json||!json.length){cb(new Error('La hoja está vacía'));return}
+cb(null,json);
+}catch(err){cb(new Error('Error al leer: '+(err.message||'archivo corrupto')))}
+};
+r.onerror=()=>cb(new Error('No se pudo leer el archivo'));
+r.readAsArrayBuffer(file);
 }
-
-/* ---------- SETUP DROP ZONES ---------- */
 setupDrop('dz-col','fi-col','hint-col',(file,hintId,dzId)=>{
 document.getElementById(hintId).textContent=file.name;
 showAlert('Leyendo inventario…','info');
@@ -563,7 +498,6 @@ hideAlert();
 showAlert(`✓ Inventario: ${json.length.toLocaleString()} filas · ${colCols.length} columnas.`,'success');
 });
 });
-
 setupDrop('dz-loans','fi-loans','hint-loans',(file,hintId,dzId)=>{
 document.getElementById(hintId).textContent=file.name;
 showAlert('Leyendo préstamos…','info');
@@ -572,48 +506,38 @@ if(err||!json||!json.length){showAlert('Error al leer préstamos: '+(err?err.mes
 document.getElementById(dzId).classList.add('loaded');
 document.getElementById('map-loans').style.display='block';
 populateLoansMaps(Object.keys(json[0]));
-loansRawJson=json;
-hasLoans=json.length>0;
+loansRawJson=json;hasLoans=json.length>0;
 hideAlert();
 showAlert(`✓ Préstamos: ${json.length.toLocaleString()} transacciones cargadas.`,'success');
 });
 });
 
-/* ---------- LOANS MAP ---------- */
 function buildLoansMapForUnit(unitCode){
 const re=/^(\d{3})/;
 const sc=document.getElementById('map-lsig').value;
 const uc=document.getElementById('map-lunit').value;
 const map={},sigMap={};
 for(const r of loansRawJson){
-if(uc&&unitCode){
-const rowUnit=String(r[uc]||'').trim();
-if(rowUnit!==unitCode)continue;
-}
+if(uc&&unitCode){const rowUnit=String(r[uc]||'').trim();if(rowUnit!==unitCode)continue}
 const sig=String(r[sc]||'').trim();if(!sig)continue;
 const m=re.exec(sig);if(!m)continue;
 const code=m[1];
 if(!map[code])map[code]={transactions:0,uniqueSigs:new Set()};
-map[code].transactions++;
-map[code].uniqueSigs.add(sig);
+map[code].transactions++;map[code].uniqueSigs.add(sig);
 sigMap[sig]=(sigMap[sig]||0)+1;
 }
 for(const k of Object.keys(map))map[k].uniqueItems=map[k].uniqueSigs.size;
 return{map,sigMap};
 }
 
-/* ---------- MAPPING ---------- */
+/* ---------- Mapeo ---------- */
 function populateColMaps(){
 const none='<option value="">— no usar —</option>';
 const opts=colCols.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
 ['map-topo','map-year','map-unit','map-titulo','map-autor'].forEach(id=>document.getElementById(id).innerHTML=none+opts);
 const norm=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
-const auto={'map-topo':['topografico','signatura','dewey','clasificacion','cota'],
-'map-year':['ano de publicacion','ano publicacion','ano','year','pub_year','fecha'],
-'map-unit':['unidad_academica','unidad academica','carrera','programa','escuela','unit'],
-'map-titulo':['titulo','title'],
-'map-autor':['autor','author']};
-for(const [id,cands] of Object.entries(auto)){
+const auto={'map-topo':['topografico','signatura','dewey','clasificacion','cota'],'map-year':['ano de publicacion','ano publicacion','ano','year','pub_year','fecha'],'map-unit':['unidad_academica','unidad academica','carrera','programa','escuela','unit'],'map-titulo':['titulo','title'],'map-autor':['autor','author']};
+for(const[id,cands]of Object.entries(auto)){
 const el=document.getElementById(id);
 const exact=colCols.find(c=>cands.some(k=>norm(c)===k));
 if(exact){el.value=exact;continue}
@@ -622,29 +546,22 @@ if(partial)el.value=partial;
 }
 document.getElementById('map-unit').addEventListener('change',buildChips);
 }
-
 function populateLoansMaps(cols){
 const none='<option value="">— no usar —</option>';
 const opts=cols.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
-['map-lsig','map-lunit'].forEach(id=>{
-const el=document.getElementById(id);
-if(el)el.innerHTML=none+opts;
-});
+['map-lsig','map-lunit'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=none+opts});
 const norm=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
-const sigMatch=cols.find(c=>['signatura','topografico','cota','callnumber'].some(k=>norm(c)===k))
-    ||cols.find(c=>['signatura','topografico','cota','callnumber'].some(k=>norm(c).includes(k)));
+const sigMatch=cols.find(c=>['signatura','topografico','cota','callnumber'].some(k=>norm(c)===k))||cols.find(c=>['signatura','topografico','cota','callnumber'].some(k=>norm(c).includes(k)));
 if(sigMatch)document.getElementById('map-lsig').value=sigMatch;
-const unitMatch=cols.find(c=>['unidad_academica','unidad academica','carrera','programa','escuela','unit'].some(k=>norm(c)===k))
-    ||cols.find(c=>['unidad_academica','unidad academica','carrera','programa','escuela','unit'].some(k=>norm(c).includes(k)));
+const unitMatch=cols.find(c=>['unidad_academica','unidad academica','carrera','programa','escuela','unit'].some(k=>norm(c)===k))||cols.find(c=>['unidad_academica','unidad academica','carrera','programa','escuela','unit'].some(k=>norm(c).includes(k)));
 const lunitEl=document.getElementById('map-lunit');
 if(unitMatch&&lunitEl)lunitEl.value=unitMatch;
 }
 
-/* ---------- CAREER CHIPS ---------- */
+/* ---------- Chips de carreras ---------- */
 function buildChips(){
 const unitCol=document.getElementById('map-unit').value;
-const grid=document.getElementById('career-grid');
-grid.innerHTML='';selCareers.clear();
+const grid=document.getElementById('career-grid');grid.innerHTML='';selCareers.clear();
 if(!unitCol){document.getElementById('sel-info').textContent='(sin columna de carrera)';return}
 const counts={};
 for(const r of colData){const u=String(r[unitCol]||'').trim();if(u)counts[u]=(counts[u]||0)+1}
@@ -663,19 +580,18 @@ updateSelInfo();
 function selAll(){document.querySelectorAll('.career-chip').forEach(ch=>{ch.classList.add('selected');selCareers.add(ch.dataset.code)});updateSelInfo()}
 function clearAll(){document.querySelectorAll('.career-chip').forEach(ch=>ch.classList.remove('selected'));selCareers.clear();updateSelInfo()}
 function updateSelInfo(){
-const n=selCareers.size;
-const uc=document.getElementById('map-unit').value;
+const n=selCareers.size;const uc=document.getElementById('map-unit').value;
 const tot=uc?colData.filter(r=>selCareers.has(String(r[uc]||'').trim())).length:0;
 document.getElementById('sel-info').textContent=n===0?'Sin selección':`${n} carrera${n>1?'s':''} · ${tot.toLocaleString()} ejemplares`;
 }
 
-/* ---------- ANALYSIS ---------- */
-function analyzeRows(rows, unitCode=null){
+/* ---------- Análisis ---------- */
+function analyzeRows(rows,unitCode=null){
 const topoCol=document.getElementById('map-topo').value;
 const yearCol=document.getElementById('map-year').value;
 const tituloCol=document.getElementById('map-titulo').value;
 const autorCol=document.getElementById('map-autor').value;
-const {map:_unitLoansMap, sigMap:_unitSigMap}=hasLoans?buildLoansMapForUnit(unitCode):{map:{},sigMap:{}};
+const{map:_unitLoansMap,sigMap:_unitSigMap}=hasLoans?buildLoansMapForUnit(unitCode):{map:{},sigMap:{}};
 const re=/^(\d{3})/,groups={};
 for(const row of rows){
 const m=re.exec(String(row[topoCol]||'').trim());if(!m)continue;
@@ -703,15 +619,15 @@ const loans=hasLoans?(_unitSigMap&&_unitSigMap[t.sig]!==undefined?_unitSigMap[t.
 const corte=t.dewey?getCutoff(t.dewey):getCutoff('000');
 const isOld=t.year!==null&&t.year<corte;
 const lpc=t.copies>0&&loans!==null?loans/t.copies:null;
-let rec='',pri=4,recColor='';
-if(loans===null){rec='Sin datos circulación';pri=5;recColor='#aaa'}
-else if(loans===0&&isOld){rec='Candidato a descarte';pri=3;recColor='#8b1a1a'}
-else if(loans===0&&!isOld){rec='Revisar pertinencia';pri=4;recColor='#1565c0'}
-else if(loans>0&&isOld&&lpc>=3){rec='Comprar más ejemplares + edición actualizada';pri=1;recColor='#8b1a1a'}
-else if(loans>0&&isOld&&lpc<3){rec='Buscar edición actualizada';pri=2;recColor='#bf360c'}
-else if(loans>0&&!isOld&&lpc>=3){rec='Comprar más ejemplares';pri=2;recColor='#8a5e00'}
-else{rec='Mantener';pri=4;recColor='#1e6b3a'}
-return{...t,loans,lpc,corte,isOld,rec,pri,recColor};
+let rec='',pri=4;
+if(loans===null){rec='Sin datos circulación';pri=5}
+else if(loans===0&&isOld){rec='Candidato a descarte';pri=3}
+else if(loans===0&&!isOld){rec='Revisar pertinencia';pri=4}
+else if(loans>0&&isOld&&lpc>=3){rec='Comprar más ejemplares + edición actualizada';pri=1}
+else if(loans>0&&isOld&&lpc<3){rec='Buscar edición actualizada';pri=2}
+else if(loans>0&&!isOld&&lpc>=3){rec='Comprar más ejemplares';pri=2}
+else{rec='Mantener';pri=4}
+return{...t,loans,lpc,corte,isOld,rec,pri};
 }).sort((a,b)=>(b.loans||0)-(a.loans||0));
 const langByCode={};
 for(const t of titleList){
@@ -735,18 +651,13 @@ const iObs=calcIObs(valid,code);
 const hlRef=getHLRef(code);
 const dc={};for(const d of DECADAS)dc[d]=valid.filter(y=>y>=d&&y<d+10).length;
 let totalLoans=0,uniqueItemsLoaned=0;
-if(hasLoans&&_unitLoansMap&&_unitLoansMap[code]){
-totalLoans=_unitLoansMap[code].transactions;
-uniqueItemsLoaned=_unitLoansMap[code].uniqueItems;
-}
+if(hasLoans&&_unitLoansMap&&_unitLoansMap[code]){totalLoans=_unitLoansMap[code].transactions;uniqueItemsLoaned=_unitLoansMap[code].uniqueItems}
 const circRate=hasLoans?(n>0?totalLoans/n:0):null;
 const uniqueSigsInCol=new Set(sigs).size;
 const pctBorrowed=hasLoans&&uniqueSigsInCol>0?(uniqueItemsLoaned/uniqueSigsInCol)*100:null;
 const lc=langByCode[code]||{en:0,es:0,otro:0,total:0};
 const pctIngles=lc.total?(lc.en/lc.total)*100:null;
-return{dewey:code,materia:dlabel(code),n,yMin,yMax,med,avg,pct,corte,hl,iObs,hlRef,dc,valid,
-totalLoans,itemsBorrowed:uniqueItemsLoaned,circRate,pctBorrowed,
-nIngles:lc.en,nTitulosMateria:lc.total,pctIngles};
+return{dewey:code,materia:dlabel(code),n,yMin,yMax,med,avg,pct,corte,hl,iObs,hlRef,dc,valid,totalLoans,itemsBorrowed:uniqueItemsLoaned,circRate,pctBorrowed,nIngles:lc.en,nTitulosMateria:lc.total,pctIngles};
 }).sort((a,b)=>a.dewey.localeCompare(b.dewey));
 deweyResult._titles=titleList;
 return deweyResult;
@@ -757,17 +668,13 @@ const topoCol=document.getElementById('map-topo').value;
 const yearCol=document.getElementById('map-year').value;
 if(!topoCol||!yearCol){showAlert('Asigne Topográfico y Año de publicación.','error');return}
 const uc=document.getElementById('map-unit').value;
-if(uc&&selCareers.size===0){
-    showAlert('Selecciona al menos una carrera para analizar, o desmapea la columna Carrera/Unidad.','warn');
-    return;
-}
+if(uc&&selCareers.size===0){showAlert('Selecciona al menos una carrera para analizar, o desmapea la columna Carrera/Unidad.','warn');return}
 showAlert('Analizando colección…','info');
-setTimeout(()=>{
-try{
+setTimeout(()=>{try{
 allResults={};
 if(!uc||selCareers.size===0){
 const resAll=analyzeRows(colData,null);resAll._titles=resAll._titles||[];allResults['Colección']=resAll;
-} else {
+}else{
 for(const code of selCareers){
 const sub=colData.filter(r=>String(r[uc]||'').trim()===code);
 const res=analyzeRows(sub,code);res._titles=res._titles||[];allResults[code]=res;
@@ -778,34 +685,28 @@ const allRates=Object.values(allResults).flatMap(d=>d.map(r=>r.circRate).filter(
 const sr=[...allRates].sort((a,b)=>a-b);
 circThreshold=sr.length?sr[Math.floor(sr.length/2)]:0.01;
 }
-buildTabs();
-populateComparisonSelects();
+buildTabs();populateComparisonSelects();
 document.getElementById('results-container').style.display='block';
 document.getElementById('results-container').scrollIntoView({behavior:'smooth',block:'start'});
 hideAlert();
 showAlert(`✓ Análisis completado: ${Object.keys(allResults).length} unidad(es) procesada(s).`,'success');
 document.getElementById('fts').textContent='Análisis: '+new Date().toLocaleString('es-CL');
-}catch(err){
-showAlert('Error durante el análisis: '+err.message,'error');
-console.error(err);
-}
+}catch(err){showAlert('Error durante el análisis: '+err.message,'error');console.error(err)}
 },50);
 }
-
 document.getElementById('analyze-btn').addEventListener('click',runAnalysis);
 
-/* ---------- QUADRANT ---------- */
 function getQuadrant(row){
 if(!hasLoans||row.circRate===null)return null;
 const desact=row.pct===null?false:row.pct>50;
 const highCirc=row.totalLoans>0&&row.circRate>=circThreshold;
-if(desact&&highCirc) return{q:1,label:'🔴 Adquirir y actualizar',bg:'#fdecea',color:'#8b1a1a'};
-if(!desact&&highCirc) return{q:2,label:'🟢 Mantener',bg:'#e6f4ec',color:'#1e6b3a'};
-if(desact&&!highCirc) return{q:3,label:'🟡 Revisar actualización',bg:'#fdf3d6',color:'#8a5e00'};
+if(desact&&highCirc)return{q:1,label:'🔴 Adquirir y actualizar',bg:'#fdecea',color:'#8b1a1a'};
+if(!desact&&highCirc)return{q:2,label:'🟢 Mantener',bg:'#e6f4ec',color:'#1e6b3a'};
+if(desact&&!highCirc)return{q:3,label:'🟡 Revisar actualización',bg:'#fdf3d6',color:'#8a5e00'};
 return{q:4,label:'🔵 Revisar pertinencia',bg:'#e3f0fc',color:'#1565c0'};
 }
 
-/* ---------- TABS ---------- */
+/* ---------- Tabs ---------- */
 function buildTabs(){
 const bar=document.getElementById('tabs-bar'),cont=document.getElementById('tabs-content');
 bar.innerHTML='';cont.innerHTML='';
@@ -816,21 +717,21 @@ tab.addEventListener('click',()=>{
 document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
 document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
 tab.classList.add('active');
-document.getElementById('tp-'+code).classList.add('active');
+document.getElementById('tp-'+idSafe(code)).classList.add('active');
 });
 bar.appendChild(tab);
 const panel=document.createElement('div');
-panel.className='tab-panel'+(i===0?' active':'');panel.id='tp-'+code;
+panel.className='tab-panel'+(i===0?' active':'');panel.id='tp-'+idSafe(code);
 panel.innerHTML=panelHTML(code,allResults[code]);
 cont.appendChild(panel);
 wirePanel(code,allResults[code]);
 });
 }
 
-/* ---------- PANEL HTML ---------- */
 function panelHTML(code,data){
+const sc=idSafe(code);
 const allV=data.flatMap(r=>r.valid).sort((a,b)=>a-b);
-const gMed=allV.length?allV[Math.floor(allV.length/2)]:'';
+const gMed=allV.length?allV[Math.floor(allV.length/2)]:'—';
 const tv=data.reduce((a,r)=>a+r.valid.length,0);
 const ta=data.reduce((a,r)=>a+r.valid.filter(y=>y<r.corte).length,0);
 const gPct=tv?(ta/tv*100).toFixed(1)+'%':'—';
@@ -851,263 +752,250 @@ const q1=data.filter(r=>getQuadrant(r)?.q===1);
 const q2=data.filter(r=>getQuadrant(r)?.q===2);
 const q3=data.filter(r=>getQuadrant(r)?.q===3);
 const q4=data.filter(r=>getQuadrant(r)?.q===4);
-loanKPIs=`
-<div class="kpi-card circ"><div class="kpi-lbl">Total movimientos</div><div class="kpi-val teal">${totalL.toLocaleString()}</div><div class="kpi-sub">préstamos + renovaciones</div></div>
-<div class="kpi-card circ"><div class="kpi-lbl">Ítems nunca prestados</div><div class="kpi-val red">${neverB.toLocaleString()}</div><div class="kpi-sub">${pctNever} del total</div></div>`;
+loanKPIs=`<div class="kpi-card circ"><div class="kpi-lbl">Total movimientos</div><div class="kpi-val teal">${totalL.toLocaleString()}</div><div class="kpi-sub">préstamos + renovaciones</div></div><div class="kpi-card circ"><div class="kpi-lbl">Ítems nunca prestados</div><div class="kpi-val red">${neverB.toLocaleString()}</div><div class="kpi-sub">${pctNever} del total</div></div>`;
 const qItems=q=>`${q.map(r=>`<span style="font-family:'DM Mono',monospace;font-size:11px">${esc(r.dewey)} ${esc(r.materia.substring(0,22))}</span>`).join('<br>')||'<span style="opacity:.5">ninguna</span>'}`;
-matrixHTML=`
-<div class="matrix-wrap">
-<h3>Matriz de decisión: Actualización × Circulación</h3>
-<p>Umbral de circulación: ${circThreshold.toFixed(2)} préstamos/ítem (mediana)</p>
-<div class="matrix">
-<div class="quadrant q1"><h4>🔴 Desactualizada · Alta circulación</h4><div class="q-stat">${q1.length} materias</div><div class="q-sub">${q1.reduce((a,r)=>a+r.n,0)} ej. · ${q1.reduce((a,r)=>a+r.totalLoans,0)} préstamos</div><div class="q-items">${qItems(q1)}</div><div class="q-action">→ Adquirir ediciones actualizadas y más ejemplares</div></div>
-<div class="quadrant q2"><h4>🟢 Actualizada · Alta circulación</h4><div class="q-stat">${q2.length} materias</div><div class="q-sub">${q2.reduce((a,r)=>a+r.n,0)} ej. · ${q2.reduce((a,r)=>a+r.totalLoans,0)} préstamos</div><div class="q-items">${qItems(q2)}</div><div class="q-action">→ Mantener y monitorear disponibilidad</div></div>
-<div class="quadrant q3"><h4>🟡 Desactualizada · Sin circulación</h4><div class="q-stat">${q3.length} materias</div><div class="q-sub">${q3.reduce((a,r)=>a+r.n,0)} ej. · ${q3.reduce((a,r)=>a+r.totalLoans,0)} préstamos</div><div class="q-items">${qItems(q3)}</div><div class="q-action">→ Revisar actualización: fondo obsoleto sin uso</div></div>
-<div class="quadrant q4"><h4>🔵 Actualizada · Sin circulación</h4><div class="q-stat">${q4.length} materias</div><div class="q-sub">${q4.reduce((a,r)=>a+r.n,0)} ej. · ${q4.reduce((a,r)=>a+r.totalLoans,0)} préstamos</div><div class="q-items">${qItems(q4)}</div><div class="q-action">→ Revisar pertinencia curricular</div></div>
-</div></div>`;
+matrixHTML=`<div class="matrix-wrap"><h3>Matriz de decisión: Actualización × Circulación</h3><p>Umbral de circulación: ${circThreshold.toFixed(2)} préstamos/ítem (mediana de clases con al menos 1 préstamo)</p><div class="matrix"><div class="quadrant q1"><h4>🔴 Desactualizada · Alta circulación</h4><div class="q-stat">${q1.length} materias</div><div class="q-sub">${q1.reduce((a,r)=>a+r.n,0)} ej. · ${q1.reduce((a,r)=>a+r.totalLoans,0)} préstamos</div><div class="q-items">${qItems(q1)}</div><div class="q-action">→ Adquirir ediciones actualizadas y más ejemplares: hay demanda real con fondo obsoleto</div></div><div class="quadrant q2"><h4>🟢 Actualizada · Alta circulación</h4><div class="q-stat">${q2.length} materias</div><div class="q-sub">${q2.reduce((a,r)=>a+r.n,0)} ej. · ${q2.reduce((a,r)=>a+r.totalLoans,0)} préstamos</div><div class="q-items">${qItems(q2)}</div><div class="q-action">→ Mantener y monitorear disponibilidad</div></div><div class="quadrant q3"><h4>🟡 Desactualizada · Sin circulación</h4><div class="q-stat">${q3.length} materias</div><div class="q-sub">${q3.reduce((a,r)=>a+r.n,0)} ej. · ${q3.reduce((a,r)=>a+r.totalLoans,0)} préstamos</div><div class="q-items">${qItems(q3)}</div><div class="q-action">→ Revisar actualización: fondo obsoleto que no se solicita</div></div><div class="quadrant q4"><h4>🔵 Actualizada · Sin circulación</h4><div class="q-stat">${q4.length} materias</div><div class="q-sub">${q4.reduce((a,r)=>a+r.n,0)} ej. · ${q4.reduce((a,r)=>a+r.totalLoans,0)} préstamos</div><div class="q-items">${qItems(q4)}</div><div class="q-action">→ Revisar pertinencia curricular</div></div></div></div>`;
 }
-const safeCode=esc(code);
 return`
 <div class="kpi-row">
-<div class="kpi-card"><div class="kpi-lbl">Ejemplares</div><div class="kpi-val">${tot.toLocaleString()}</div><div class="kpi-sub">${safeCode}</div></div>
+<div class="kpi-card"><div class="kpi-lbl">Ejemplares</div><div class="kpi-val">${tot.toLocaleString()}</div><div class="kpi-sub">${esc(code)}</div></div>
 <div class="kpi-card"><div class="kpi-lbl">Clases Dewey</div><div class="kpi-val">${data.length}</div><div class="kpi-sub">áreas temáticas</div></div>
 <div class="kpi-card"><div class="kpi-lbl">Mediana global</div><div class="kpi-val">${gMed}</div><div class="kpi-sub">año publicación</div></div>
 <div class="kpi-card"><div class="kpi-lbl">% ant. corte</div><div class="kpi-val">${gPct}</div><div class="kpi-sub">corte diferenciado</div></div>
 <div class="kpi-card hl"><div class="kpi-lbl">Semivida</div><div class="kpi-val purple">${gHLstr}</div><div class="kpi-sub">${hlInt}</div></div>
-<div class="kpi-card"><div class="kpi-lbl">% Inglés</div><div class="kpi-val">${pctEnStr}</div><div class="kpi-sub">${nEn} de ${titlesForLang.length} títulos</div></div>
+<div class="kpi-card"><div class="kpi-lbl">% Inglés</div><div class="kpi-val">${pctEnStr}</div><div class="kpi-sub">${nEn} de ${titlesForLang.length} títulos (heurístico)</div></div>
 ${loanKPIs}
 </div>
 ${matrixHTML}
 <div class="charts-section">
-<button class="charts-toggle" id="ct-${safeCode}">
-<span class="ct-arrow">▶</span>
-📊 Ver gráficos de análisis
-</button>
-<div class="charts-content" id="cc-${safeCode}">
+<button class="charts-toggle" id="ct-${sc}"><span class="ct-arrow">▶</span> 📊 Ver gráficos de análisis <span style="margin-left:auto;font-family:'DM Mono',monospace;font-size:11px;font-weight:400;color:var(--ink3)">para presentaciones</span></button>
+<div class="charts-content" id="cc-${sc}">
+<div class="charts-actions">
+<button class="dl-btn p" data-dlzip="${sc}">📥 Descargar todos los gráficos (ZIP)</button>
+<span style="font-size:11px;color:var(--ink3)">PNG alta resolución · fondo blanco · listos para PowerPoint</span>
+</div>
 <div class="charts-grid">
-<div class="chart-card"><h4>Estado de actualización</h4><canvas id="chart-status-${safeCode}"></canvas></div>
-<div class="chart-card"><h4>Distribución por décadas</h4><canvas id="chart-decades-${safeCode}"></canvas></div>
-<div class="chart-card"><h4>Top 10 materias por ejemplares</h4><canvas id="chart-top-${safeCode}"></canvas></div>
-${hasLoans?`<div class="chart-card"><h4>Circulación por cuadrante</h4><canvas id="chart-quad-${safeCode}"></canvas></div>`:''}
+<div class="chart-card"><h4><span>Estado de actualización</span><button class="chart-dl-btn" data-dlchart="status">📥 PNG</button></h4><canvas id="chart-status-${sc}"></canvas></div>
+<div class="chart-card"><h4><span>Distribución por décadas</span><button class="chart-dl-btn" data-dlchart="decades">📥 PNG</button></h4><canvas id="chart-decades-${sc}"></canvas></div>
+<div class="chart-card"><h4><span>Top 10 materias por ejemplares</span><button class="chart-dl-btn" data-dlchart="top">📥 PNG</button></h4><canvas id="chart-top-${sc}"></canvas></div>
+${hasLoans?`<div class="chart-card"><h4><span>Circulación por cuadrante</span><button class="chart-dl-btn" data-dlchart="quad">📥 PNG</button></h4><canvas id="chart-quad-${sc}"></canvas></div>`:''}
 </div>
 </div>
 </div>
 <div class="tbl-wrap">
-<div class="tbl-head">
-<h3>Detalle por materia · ${safeCode}</h3>
-<input class="filter-inp" type="text" placeholder="Filtrar…" id="fi-${safeCode}">
-</div>
+<div class="tbl-head"><h3>Detalle por materia · ${esc(code)}</h3><input class="filter-inp" type="text" placeholder="Filtrar…" id="fi-${sc}"></div>
 <div style="overflow-x:auto">
 <table><thead><tr>
-<th data-col="dewey" data-code="${safeCode}">Dewey</th>
-<th data-col="materia" data-code="${safeCode}">Materia</th>
-<th data-col="n" data-code="${safeCode}" style="text-align:right">N</th>
-<th data-col="yMin" data-code="${safeCode}" style="text-align:right">Mín</th>
-<th data-col="yMax" data-code="${safeCode}" style="text-align:right">Máx</th>
-<th data-col="med" data-code="${safeCode}" style="text-align:right">Mediana</th>
-<th data-col="corte" data-code="${safeCode}">Corte</th>
-<th data-col="pct" data-code="${safeCode}">% ant. corte</th>
-<th data-col="pct" data-code="${safeCode}">Estado</th>
-<th data-col="hl" data-code="${safeCode}" class="th-hl">Semivida</th>
-<th data-col="pctIngles" data-code="${safeCode}">% Inglés</th>
-${hasLoans?`
-<th data-col="totalLoans" data-code="${safeCode}" class="th-circ">Préstamos</th>
-<th data-col="circRate" data-code="${safeCode}" class="th-circ">Tasa circ.</th>
-<th data-col="pctBorrowed" data-code="${safeCode}" class="th-circ">% prestados</th>
-<th data-col="circRate" data-code="${safeCode}" class="th-circ">Decisión</th>`:''}
+<th data-col="dewey" data-code="${sc}">Dewey</th><th data-col="materia" data-code="${sc}">Materia</th>
+<th data-col="n" data-code="${sc}" style="text-align:right">N</th>
+<th data-col="yMin" data-code="${sc}" style="text-align:right">Mín</th>
+<th data-col="yMax" data-code="${sc}" style="text-align:right">Máx</th>
+<th data-col="med" data-code="${sc}" style="text-align:right">Mediana</th>
+<th data-col="corte" data-code="${sc}">Corte</th>
+<th data-col="pct" data-code="${sc}">% ant. corte</th>
+<th data-col="pct" data-code="${sc}">Estado</th>
+<th data-col="hl" data-code="${sc}" class="th-hl">Semivida</th>
+<th data-col="pctIngles" data-code="${sc}">% Inglés</th>
+${hasLoans?`<th data-col="totalLoans" data-code="${sc}" class="th-circ">Préstamos</th><th data-col="circRate" data-code="${sc}" class="th-circ">Tasa circ.</th><th data-col="pctBorrowed" data-code="${sc}" class="th-circ">% prestados</th><th data-col="circRate" data-code="${sc}" class="th-circ">Decisión</th>`:''}
 <th>Décadas</th>
-</tr></thead>
-<tbody id="tb-${safeCode}"></tbody></table>
-</div>
-</div>
+</tr></thead><tbody id="tb-${sc}"></tbody></table>
+</div></div>
 <div class="dl-row">
-<button class="dl-btn p" data-excel="${safeCode}">📊 Excel — ${safeCode}</button>
-<button class="dl-btn s" data-csv="${safeCode}">📄 CSV — ${safeCode}</button>
-<button class="dl-btn m" data-budget="${safeCode}">📋 Informe presupuestario</button>
+<button class="dl-btn p" data-excel="${sc}">📊 Excel — ${esc(code)}</button>
+<button class="dl-btn s" data-csv="${sc}">📄 CSV — ${esc(code)}</button>
+<button class="dl-btn m" data-budget="${sc}">📋 Informe presupuestario</button>
 </div>
 <div class="title-section">
-<button class="title-toggle" id="tt-${safeCode}">
-<span class="tt-arrow">▶</span>
-📖 Ver detalle por título individual
-<span style="margin-left:auto;font-family:'DM Mono',monospace;font-size:11px;font-weight:400;color:var(--ink3)" id="tt-count-${safeCode}"></span>
-</button>
-<div class="title-content" id="tc-${safeCode}">
+<button class="title-toggle" id="tt-${sc}"><span class="tt-arrow">▶</span> 📖 Ver detalle por título individual <span style="margin-left:auto;font-family:'DM Mono',monospace;font-size:11px;font-weight:400;color:var(--ink3)" id="tt-count-${sc}"></span></button>
+<div class="title-content" id="tc-${sc}">
 <div class="title-filter-row">
-<select id="tf-pri-${safeCode}">
-<option value="">Todas las prioridades</option>
-<option value="1">🔴 Prioridad 1 — Urgente</option>
-<option value="2">🟠 Prioridad 2 — Recomendado</option>
-<option value="3">🟡 Prioridad 3 — Revisar/Descartar</option>
-<option value="4">🔵 Sin acción requerida</option>
-</select>
-<select id="tf-rec-${safeCode}">
-<option value="">Todas las recomendaciones</option>
-<option value="Comprar más ejemplares + edición actualizada">Comprar más ej. + edición actualizada</option>
-<option value="Buscar edición actualizada">Buscar edición actualizada</option>
-<option value="Comprar más ejemplares">Comprar más ejemplares</option>
-<option value="Candidato a descarte">Candidato a descarte</option>
-<option value="Revisar pertinencia">Revisar pertinencia</option>
-<option value="Mantener">Mantener</option>
-</select>
-<select id="tf-lang-${safeCode}">
-<option value="">Todos los idiomas</option>
-<option value="EN">🇬🇧 Inglés</option>
-<option value="ES">🇪🇸 Español</option>
-<option value="Indet.">Indeterminado</option>
-</select>
-<input type="text" id="tf-q-${safeCode}" placeholder="Buscar título o autor…" style="width:200px">
-<span style="font-size:12px;color:var(--ink3)" id="tf-info-${safeCode}"></span>
+<select id="tf-pri-${sc}"><option value="">Todas las prioridades</option><option value="1">🔴 Prioridad 1 — Urgente</option><option value="2">🟠 Prioridad 2 — Recomendado</option><option value="3">🟡 Prioridad 3 — Revisar/Descartar</option><option value="4">🔵 Sin acción requerida</option></select>
+<select id="tf-rec-${sc}"><option value="">Todas las recomendaciones</option><option value="Comprar más ejemplares + edición actualizada">Comprar más ej. + edición actualizada</option><option value="Buscar edición actualizada">Buscar edición actualizada</option><option value="Comprar más ejemplares">Comprar más ejemplares</option><option value="Candidato a descarte">Candidato a descarte</option><option value="Revisar pertinencia">Revisar pertinencia</option><option value="Mantener">Mantener</option></select>
+<select id="tf-lang-${sc}"><option value="">Todos los idiomas</option><option value="EN">🇬🇧 Inglés</option><option value="ES">🇪🇸 Español</option><option value="Indet.">Indeterminado</option></select>
+<input type="text" id="tf-q-${sc}" placeholder="Buscar título o autor…" style="width:200px">
+<span style="font-size:12px;color:var(--ink3)" id="tf-info-${sc}"></span>
 </div>
 <div style="overflow-x:auto">
 <table><thead><tr>
-<th data-tcol="pri" data-tcode="${safeCode}">Pri.</th>
-<th data-tcol="sig" data-tcode="${safeCode}">Signatura</th>
-<th data-tcol="titulo" data-tcode="${safeCode}">Título</th>
-<th data-tcol="autor" data-tcode="${safeCode}">Autor</th>
-<th data-tcol="lang" data-tcode="${safeCode}">Idioma</th>
-<th data-tcol="year" data-tcode="${safeCode}" style="text-align:right">Año</th>
-<th data-tcol="copies" data-tcode="${safeCode}" style="text-align:right">Copias</th>
-<th data-tcol="loans" data-tcode="${safeCode}" style="text-align:right">Préstamos</th>
-<th data-tcol="lpc" data-tcode="${safeCode}" style="text-align:right">P/Copia</th>
-<th data-tcol="rec" data-tcode="${safeCode}">Recomendación</th>
-</tr></thead>
-<tbody id="ttb-${safeCode}"></tbody></table>
-</div>
-</div>
-</div>`;
+<th data-tcol="pri" data-tcode="${sc}">Pri.</th><th data-tcol="sig" data-tcode="${sc}">Signatura</th>
+<th data-tcol="titulo" data-tcode="${sc}">Título</th><th data-tcol="autor" data-tcode="${sc}">Autor</th>
+<th data-tcol="lang" data-tcode="${sc}">Idioma</th><th data-tcol="year" data-tcode="${sc}" style="text-align:right">Año</th>
+<th data-tcol="copies" data-tcode="${sc}" style="text-align:right">Copias</th>
+<th data-tcol="loans" data-tcode="${sc}" style="text-align:right">Préstamos</th>
+<th data-tcol="lpc" data-tcode="${sc}" style="text-align:right">P/Copia</th>
+<th data-tcol="rec" data-tcode="${sc}">Recomendación</th>
+</tr></thead><tbody id="ttb-${sc}"></tbody></table>
+</div></div></div>`;
 }
 
-/* ---------- WIRE PANEL ---------- */
 function wirePanel(code,data){
-const safeCode=esc(code);
-renderTbody(safeCode,data);
-document.getElementById('fi-'+safeCode).addEventListener('input',function(){
+const sc=idSafe(code);
+renderTbody(sc,data);
+document.getElementById('fi-'+sc).addEventListener('input',function(){
 const q=this.value.toLowerCase();
-renderTbody(safeCode,q?data.filter(r=>r.materia.toLowerCase().includes(q)||r.dewey.includes(q)):data);
+renderTbody(sc,q?data.filter(r=>r.materia.toLowerCase().includes(q)||r.dewey.includes(q)):data);
 });
-document.querySelectorAll(`th[data-code="${safeCode}"]`).forEach(th=>{
+document.querySelectorAll(`th[data-code="${sc}"]`).forEach(th=>{
 th.addEventListener('click',()=>{
 const col=th.dataset.col,wasAsc=th.classList.contains('sa');
-document.querySelectorAll(`th[data-code="${safeCode}"]`).forEach(h=>h.classList.remove('sa','sd'));
+document.querySelectorAll(`th[data-code="${sc}"]`).forEach(h=>h.classList.remove('sa','sd'));
 const dir=wasAsc?'desc':'asc';th.classList.add(dir==='asc'?'sa':'sd');
 const sorted=[...data].sort((a,b)=>{
 const av=a[col],bv=b[col];
 if(av===null||av===undefined)return 1;if(bv===null||bv===undefined)return -1;
 return dir==='asc'?(typeof av==='string'?av.localeCompare(bv):av-bv):(typeof av==='string'?bv.localeCompare(av):bv-av);
 });
-renderTbody(safeCode,sorted);
+renderTbody(sc,sorted);
 });
 });
-document.querySelector(`[data-excel="${safeCode}"]`).addEventListener('click',()=>dlExcel(code,data));
-document.querySelector(`[data-csv="${safeCode}"]`).addEventListener('click',()=>dlCSV(code,data));
-document.querySelector(`[data-budget="${safeCode}"]`).addEventListener('click',()=>dlBudget(code,data));
-// Charts toggle
-const ctBtn=document.getElementById('ct-'+safeCode);
-const ctContent=document.getElementById('cc-'+safeCode);
+document.querySelector(`[data-excel="${sc}"]`).addEventListener('click',()=>dlExcel(code,data));
+document.querySelector(`[data-csv="${sc}"]`).addEventListener('click',()=>dlCSV(code,data));
+document.querySelector(`[data-budget="${sc}"]`).addEventListener('click',()=>dlBudget(code,data));
+const ctBtn=document.getElementById('ct-'+sc);
+const ctContent=document.getElementById('cc-'+sc);
 if(ctBtn){
 ctBtn.addEventListener('click',()=>{
-ctBtn.classList.toggle('open');
-ctContent.classList.toggle('open');
+ctBtn.classList.toggle('open');ctContent.classList.toggle('open');
 if(ctContent.classList.contains('open')&&!ctContent.dataset.rendered){
-renderCharts(safeCode,code,data);
+renderCharts(sc,code,data);
+ctContent.querySelectorAll('[data-dlchart]').forEach(btn=>{
+btn.addEventListener('click',()=>{
+const key=btn.getAttribute('data-dlchart');
+downloadChartAsPNG('chart-'+key+'-'+sc,CHART_NAMES[key]+'_'+code);
+});
+});
+const zipBtn=ctContent.querySelector('[data-dlzip]');
+if(zipBtn)zipBtn.addEventListener('click',()=>downloadChartsZIP([code],'Graficos_'+code+'_'+CY));
 ctContent.dataset.rendered='1';
 }
 });
 }
-// Title section
 const titles=data._titles||[];
-const ttBtn=document.getElementById('tt-'+safeCode);
-const ttContent=document.getElementById('tc-'+safeCode);
-const ttCount=document.getElementById('tt-count-'+safeCode);
+const ttBtn=document.getElementById('tt-'+sc);
+const ttContent=document.getElementById('tc-'+sc);
+const ttCount=document.getElementById('tt-count-'+sc);
 if(ttCount)ttCount.textContent=titles.length+' títulos';
 if(ttBtn){
 ttBtn.addEventListener('click',()=>{
-ttBtn.classList.toggle('open');
-ttContent.classList.toggle('open');
+ttBtn.classList.toggle('open');ttContent.classList.toggle('open');
 if(ttContent.classList.contains('open')&&!ttContent.dataset.wired){
-renderTitleTable(safeCode,titles);
-wireTitleFilters(safeCode,titles);
-ttContent.dataset.wired='1';
+renderTitleTable(sc,titles);wireTitleFilters(sc,titles);ttContent.dataset.wired='1';
 }
 });
 }
-document.querySelectorAll(`th[data-tcode="${safeCode}"]`).forEach(th=>{
+document.querySelectorAll(`th[data-tcode="${sc}"]`).forEach(th=>{
 th.addEventListener('click',()=>{
 const col=th.dataset.tcol,wasAsc=th.classList.contains('sa');
-document.querySelectorAll(`th[data-tcode="${safeCode}"]`).forEach(h=>h.classList.remove('sa','sd'));
+document.querySelectorAll(`th[data-tcode="${sc}"]`).forEach(h=>h.classList.remove('sa','sd'));
 const dir=wasAsc?'desc':'asc';th.classList.add(dir==='asc'?'sa':'sd');
-const f=getCurrentTitleFilter(safeCode,titles);
+const f=getCurrentTitleFilter(sc,titles);
 const sorted=[...f].sort((a,b)=>{
 const av=a[col],bv=b[col];
 if(av===null||av===undefined)return 1;if(bv===null||bv===undefined)return -1;
 return dir==='asc'?(typeof av==='string'?av.localeCompare(bv):av-bv):(typeof av==='string'?bv.localeCompare(av):bv-av);
 });
-renderTitleTable(safeCode,sorted);
+renderTitleTable(sc,sorted);
 });
 });
 }
 
-/* ---------- CHARTS (Chart.js) ---------- */
-function renderCharts(safeCode,code,data){
-// Destroy previous instances
+/* ---------- Gráficos ---------- */
+function renderCharts(sc,code,data){
 ['status','decades','top','quad'].forEach(k=>{
-if(chartInstances[safeCode+'-'+k]){chartInstances[safeCode+'-'+k].destroy();delete chartInstances[safeCode+'-'+k]}
+if(chartInstances[sc+'-'+k]){chartInstances[sc+'-'+k].destroy();delete chartInstances[sc+'-'+k]}
 });
-// 1. Status pie
 const nAct=data.filter(r=>r.pct!==null&&r.pct<=30).length;
 const nMod=data.filter(r=>r.pct!==null&&r.pct>30&&r.pct<=70).length;
 const nDes=data.filter(r=>r.pct!==null&&r.pct>70).length;
 const nSin=data.filter(r=>r.pct===null).length;
-const ctx1=document.getElementById('chart-status-'+safeCode);
+const ctx1=document.getElementById('chart-status-'+sc);
 if(ctx1){
-chartInstances[safeCode+'-status']=new Chart(ctx1,{
-type:'doughnut',
+chartInstances[sc+'-status']=new Chart(ctx1,{type:'doughnut',
 data:{labels:['Actualizado (≤30%)','Moderado (30-70%)','Desactualizado (>70%)','Sin dato'],
 datasets:[{data:[nAct,nMod,nDes,nSin],backgroundColor:['#1e6b3a','#f9a825','#c62828','#9e9e9e'],borderWidth:2,borderColor:'#fff'}]},
-options:{responsive:true,plugins:{legend:{position:'bottom',labels:{font:{size:11}}}}}
-});
+options:{responsive:true,plugins:{legend:{position:'bottom',labels:{font:{size:11}}}}}});
 }
-// 2. Decades bar
 const decadeTotals=DECADAS.map(d=>data.reduce((a,r)=>a+(r.dc[d]||0),0));
-const ctx2=document.getElementById('chart-decades-'+safeCode);
+const ctx2=document.getElementById('chart-decades-'+sc);
 if(ctx2){
-chartInstances[safeCode+'-decades']=new Chart(ctx2,{
-type:'bar',
-data:{labels:DECADAS.map(d=>d+'s'),datasets:[{label:'Ejemplares',data:decadeTotals,
-backgroundColor:['#c62828','#ef6c00','#f9a825','#7cb342','#2e7d32','#1a5c34','#0d47a1'],borderWidth:1}]},
-options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}
-});
+chartInstances[sc+'-decades']=new Chart(ctx2,{type:'bar',
+data:{labels:DECADAS.map(d=>d+'s'),datasets:[{label:'Ejemplares',data:decadeTotals,backgroundColor:['#c62828','#ef6c00','#f9a825','#7cb342','#2e7d32','#1a5c34','#0d47a1'],borderWidth:1}]},
+options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
 }
-// 3. Top 10 materias
 const top10=[...data].sort((a,b)=>b.n-a.n).slice(0,10);
-const ctx3=document.getElementById('chart-top-'+safeCode);
+const ctx3=document.getElementById('chart-top-'+sc);
 if(ctx3){
-chartInstances[safeCode+'-top']=new Chart(ctx3,{
-type:'bar',
-data:{labels:top10.map(r=>r.dewey+' '+r.materia.substring(0,20)),
-datasets:[{label:'Ejemplares',data:top10.map(r=>r.n),backgroundColor:'#1a3a6b'}]},
-options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true}}}
-});
+chartInstances[sc+'-top']=new Chart(ctx3,{type:'bar',
+data:{labels:top10.map(r=>r.dewey+' '+r.materia.substring(0,20)),datasets:[{label:'Ejemplares',data:top10.map(r=>r.n),backgroundColor:'#1a3a6b'}]},
+options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true}}}});
 }
-// 4. Quadrant pie (if loans)
 if(hasLoans){
 const q1=data.filter(r=>getQuadrant(r)?.q===1).length;
 const q2=data.filter(r=>getQuadrant(r)?.q===2).length;
 const q3=data.filter(r=>getQuadrant(r)?.q===3).length;
 const q4=data.filter(r=>getQuadrant(r)?.q===4).length;
-const ctx4=document.getElementById('chart-quad-'+safeCode);
+const ctx4=document.getElementById('chart-quad-'+sc);
 if(ctx4){
-chartInstances[safeCode+'-quad']=new Chart(ctx4,{
-type:'pie',
+chartInstances[sc+'-quad']=new Chart(ctx4,{type:'pie',
 data:{labels:['🔴 Adquirir/Actualizar','🟢 Mantener','🟡 Revisar actualiz.','🔵 Revisar pertinencia'],
 datasets:[{data:[q1,q2,q3,q4],backgroundColor:['#c62828','#1e6b3a','#f9a825','#1565c0'],borderWidth:2,borderColor:'#fff'}]},
-options:{responsive:true,plugins:{legend:{position:'bottom',labels:{font:{size:11}}}}}
-});
+options:{responsive:true,plugins:{legend:{position:'bottom',labels:{font:{size:11}}}}}});
 }
 }
 }
 
-/* ---------- COMPARISON ---------- */
+/* ---------- Descarga de gráficos ---------- */
+function downloadChartAsPNG(canvasId,filename){
+const canvas=document.getElementById(canvasId);
+if(!canvas){showAlert('Gráfico no encontrado. Abre la sección de gráficos primero.','error');return}
+const chart=Chart.getChart(canvas);
+if(!chart){showAlert('Gráfico no renderizado. Abre la sección de gráficos primero.','error');return}
+try{
+const dataUrl=chart.toBase64Image('image/png',1.0);
+const a=document.createElement('a');
+a.href=dataUrl;a.download=fileSafe(filename)+'.png';
+document.body.appendChild(a);a.click();document.body.removeChild(a);
+}catch(err){showAlert('Error al descargar gráfico: '+err.message,'error')}
+}
+
+async function downloadChartsZIP(codes,zipName){
+if(typeof JSZip==='undefined'){showAlert('JSZip no cargó. Verifica tu conexión a internet.','error');return}
+const zip=new JSZip();let count=0;
+for(const code of codes){
+const sc=idSafe(code);
+const folder=codes.length>1?zip.folder(fileSafe(code)):zip;
+const keys=['status','decades','top'];
+if(hasLoans)keys.push('quad');
+for(const key of keys){
+const canvas=document.getElementById('chart-'+key+'-'+sc);
+if(!canvas)continue;
+const chart=Chart.getChart(canvas);
+if(!chart)continue;
+try{
+const dataUrl=chart.toBase64Image('image/png',1.0);
+folder.file(CHART_NAMES[key]+'.png',dataUrl.split(',')[1],{base64:true});
+count++;
+}catch(e){console.warn(e)}
+}
+}
+if(count===0){showAlert('No hay gráficos disponibles. Abre la sección de gráficos de cada carrera primero.','warn');return}
+showAlert('Generando ZIP con '+count+' gráficos...','info');
+try{
+const blob=await zip.generateAsync({type:'blob'});
+const url=URL.createObjectURL(blob);
+const a=document.createElement('a');
+a.href=url;a.download=fileSafe(zipName)+'.zip';
+document.body.appendChild(a);a.click();document.body.removeChild(a);
+setTimeout(()=>URL.revokeObjectURL(url),2000);
+showAlert('✓ '+count+' gráficos descargados en ZIP.','success');
+}catch(err){showAlert('Error al generar ZIP: '+err.message,'error')}
+}
+document.getElementById('dl-all-charts').addEventListener('click',()=>{
+const title=document.getElementById('report-title').value.trim()||'Colecciones';
+downloadChartsZIP(Object.keys(allResults),'Graficos_'+title+'_'+CY);
+});
+
+/* ---------- Comparación ---------- */
 function populateComparisonSelects(){
 const keys=Object.keys(allResults);
 const opts=keys.map(k=>`<option value="${esc(k)}">${esc(k)}</option>`).join('');
@@ -1115,7 +1003,6 @@ document.getElementById('compare-c1').innerHTML=opts;
 document.getElementById('compare-c2').innerHTML=opts;
 if(keys.length>1)document.getElementById('compare-c2').value=keys[1];
 }
-
 function runComparison(){
 const c1=document.getElementById('compare-c1').value;
 const c2=document.getElementById('compare-c2').value;
@@ -1124,7 +1011,6 @@ if(c1===c2){showAlert('Selecciona carreras diferentes.','warn');return}
 const d1=allResults[c1],d2=allResults[c2];
 const cont=document.getElementById('comparison-content');
 cont.classList.add('open');
-// Calculate metrics
 const calc=(d)=>{
 const allV=d.flatMap(r=>r.valid).sort((a,b)=>a-b);
 const tot=d.reduce((a,b)=>a+b.n,0);
@@ -1143,70 +1029,46 @@ return{tot,med,pct,hl,pctEn,totalL,neverB,q1};
 };
 const m1=calc(d1),m2=calc(d2);
 const fmt=(v,suf='')=>v===null||v===undefined?'—':(typeof v==='number'?v.toFixed(1):v)+suf;
-const better=(a,b,lower=false)=>{
-if(a===null&&b===null)return['',''];
-if(a===null)return['',''];
-if(b===null)return['',''];
-if(lower)return a<b?'✓ mejor':'';
-return a>b?'✓ mejor':'';
-};
-cont.innerHTML=`
-<div class="comparison-kpis">
-<div class="comparison-card">
-<h4>${esc(c1)}</h4>
-<div class="comparison-metric"><span class="comparison-metric-label">Ejemplares totales</span><span class="comparison-metric-value">${m1.tot.toLocaleString()}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">Mediana año publicación</span><span class="comparison-metric-value">${m1.med||'—'}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">% desactualizado</span><span class="comparison-metric-value">${fmt(m1.pct,'%')}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">Semivida (años)</span><span class="comparison-metric-value">${m1.hl||'—'}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">% Inglés</span><span class="comparison-metric-value">${fmt(m1.pctEn,'%')}</span></div>
-${hasLoans?`
-<div class="comparison-metric"><span class="comparison-metric-label">Total préstamos</span><span class="comparison-metric-value">${m1.totalL.toLocaleString()}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">Ítems nunca prestados</span><span class="comparison-metric-value">${m1.neverB.toLocaleString()}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">Materias Q1 (urgente)</span><span class="comparison-metric-value">${m1.q1}</span></div>`:''}
-</div>
-<div class="comparison-card">
-<h4>${esc(c2)}</h4>
-<div class="comparison-metric"><span class="comparison-metric-label">Ejemplares totales</span><span class="comparison-metric-value">${m2.tot.toLocaleString()}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">Mediana año publicación</span><span class="comparison-metric-value">${m2.med||'—'}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">% desactualizado</span><span class="comparison-metric-value">${fmt(m2.pct,'%')}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">Semivida (años)</span><span class="comparison-metric-value">${m2.hl||'—'}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">% Inglés</span><span class="comparison-metric-value">${fmt(m2.pctEn,'%')}</span></div>
-${hasLoans?`
-<div class="comparison-metric"><span class="comparison-metric-label">Total préstamos</span><span class="comparison-metric-value">${m2.totalL.toLocaleString()}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">Ítems nunca prestados</span><span class="comparison-metric-value">${m2.neverB.toLocaleString()}</span></div>
-<div class="comparison-metric"><span class="comparison-metric-label">Materias Q1 (urgente)</span><span class="comparison-metric-value">${m2.q1}</span></div>`:''}
-</div>
-</div>
-<div class="comparison-charts">
-<div class="chart-card"><h4>Comparación: % desactualizado</h4><canvas id="chart-comp-pct"></canvas></div>
-<div class="chart-card"><h4>Comparación: Semivida (años)</h4><canvas id="chart-comp-hl"></canvas></div>
+const card=(label,m)=>`
+<div class="comparison-card"><h4>${esc(label)}</h4>
+<div class="comparison-metric"><span class="comparison-metric-label">Ejemplares totales</span><span class="comparison-metric-value">${m.tot.toLocaleString()}</span></div>
+<div class="comparison-metric"><span class="comparison-metric-label">Mediana año publicación</span><span class="comparison-metric-value">${m.med||'—'}</span></div>
+<div class="comparison-metric"><span class="comparison-metric-label">% desactualizado</span><span class="comparison-metric-value">${fmt(m.pct,'%')}</span></div>
+<div class="comparison-metric"><span class="comparison-metric-label">Semivida (años)</span><span class="comparison-metric-value">${m.hl||'—'}</span></div>
+<div class="comparison-metric"><span class="comparison-metric-label">% Inglés</span><span class="comparison-metric-value">${fmt(m.pctEn,'%')}</span></div>
+${hasLoans?`<div class="comparison-metric"><span class="comparison-metric-label">Total préstamos</span><span class="comparison-metric-value">${m.totalL.toLocaleString()}</span></div>
+<div class="comparison-metric"><span class="comparison-metric-label">Ítems nunca prestados</span><span class="comparison-metric-value">${m.neverB.toLocaleString()}</span></div>
+<div class="comparison-metric"><span class="comparison-metric-label">Materias Q1 (urgente)</span><span class="comparison-metric-value">${m.q1}</span></div>`:''}
 </div>`;
-// Render comparison charts
+cont.innerHTML=`
+<div class="comparison-kpis">${card(c1,m1)}${card(c2,m2)}</div>
+<div class="comparison-charts">
+<div class="chart-card"><h4><span>Comparación: % desactualizado</span><button class="chart-dl-btn" id="cmp-dl-pct">📥 PNG</button></h4><canvas id="chart-comp-pct"></canvas></div>
+<div class="chart-card"><h4><span>Comparación: Semivida (años)</span><button class="chart-dl-btn" id="cmp-dl-hl">📥 PNG</button></h4><canvas id="chart-comp-hl"></canvas></div>
+</div>`;
 setTimeout(()=>{
+['cmp-pct','cmp-hl'].forEach(k=>{if(chartInstances[k]){chartInstances[k].destroy();delete chartInstances[k]}});
 const ctxPct=document.getElementById('chart-comp-pct');
 if(ctxPct){
-new Chart(ctxPct,{
-type:'bar',
+chartInstances['cmp-pct']=new Chart(ctxPct,{type:'bar',
 data:{labels:[c1,c2],datasets:[{label:'% desactualizado',data:[m1.pct||0,m2.pct||0],backgroundColor:['#1a3a6b','#c8a84b']}]},
-options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,max:100}}}
-});
+options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,max:100}}}});
 }
 const ctxHl=document.getElementById('chart-comp-hl');
 if(ctxHl){
-new Chart(ctxHl,{
-type:'bar',
+chartInstances['cmp-hl']=new Chart(ctxHl,{type:'bar',
 data:{labels:[c1,c2],datasets:[{label:'Semivida (años)',data:[m1.hl||0,m2.hl||0],backgroundColor:['#1a3a6b','#c8a84b']}]},
-options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}
-});
+options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
 }
+document.getElementById('cmp-dl-pct').addEventListener('click',()=>downloadChartAsPNG('chart-comp-pct',COMP_CHART_NAMES.pct));
+document.getElementById('cmp-dl-hl').addEventListener('click',()=>downloadChartAsPNG('chart-comp-hl',COMP_CHART_NAMES.hl));
 },100);
 }
 
-/* ---------- RENDER TABLES ---------- */
+/* ---------- Render tablas ---------- */
 function dcol(d){if(d>=2020)return'#1a5c34';if(d>=2010)return'#2e7d32';if(d>=2000)return'#7cb342';if(d>=1990)return'#f9a825';if(d>=1980)return'#ef6c00';return'#c62828'}
-
-function renderTbody(safeCode,data){
-const tbody=document.getElementById('tb-'+safeCode);if(!tbody)return;
+function renderTbody(sc,data){
+const tbody=document.getElementById('tb-'+sc);if(!tbody)return;
 tbody.innerHTML=data.map(row=>{
 const p=row.pct;
 const bc=p===null?'':p<=30?'g':p<=70?'a':'r';
@@ -1214,20 +1076,14 @@ const bl=p===null?'Sin año':p<=30?'✓ Actualizado':p<=70?'◑ Moderado':'✗ D
 const fc=p===null?'#ccc':p<=30?'var(--green)':p<=70?'#f9a825':'var(--red)';
 const cc=yearColor(row.corte);
 const maxD=Math.max(...DECADAS.map(d=>row.dc[d]||0),1);
-const bars=DECADAS.map(d=>{const v=row.dc[d]||0,h=Math.round(v/maxD*14)+2;
-return`<div class="dbar" style="height:${h}px;background:${dcol(d)};opacity:${v?.85:.12}" title="${d}s: ${v}"></div>`;
-}).join('');
+const bars=DECADAS.map(d=>{const v=row.dc[d]||0,h=Math.round(v/maxD*14)+2;return`<div class="dbar" style="height:${h}px;background:${dcol(d)};opacity:${v?.85:.12}" title="${d}s: ${v}"></div>`}).join('');
 const hlStr=row.hl!==null?`<span class="hl-badge" style="background:${row.hl<=6?'#fce8ec':row.hl<=12?'#fff3e0':'#e6f4ec'};color:${row.hl<=6?'#8b1a1a':row.hl<=12?'#8a5e00':'#1e6b3a'}">${row.hl}a</span>`:'<span style="color:var(--ink3)">—</span>';
 let loanCols='';
 if(hasLoans){
 const qd=getQuadrant(row);
 const circBg=row.circRate!==null&&row.circRate>=circThreshold?'#e0f7fa':'#f5f5f5';
 const pBg=row.pctBorrowed!==null&&row.pctBorrowed>50?'#e6f4ec':'#fafafa';
-loanCols=`
-<td class="num td-circ">${row.totalLoans}</td>
-<td class="td-circ" style="background:${circBg}"><span style="font-family:'DM Mono',monospace;font-size:11px;font-weight:600">${row.circRate!==null?row.circRate.toFixed(2):'—'}</span></td>
-<td class="td-circ" style="background:${pBg}"><span style="font-family:'DM Mono',monospace;font-size:11px">${row.pctBorrowed!==null?row.pctBorrowed.toFixed(1)+'%':'—'}</span></td>
-<td>${qd?`<span class="quad-pill" style="background:${qd.bg};color:${qd.color}">${esc(qd.label)}</span>`:'<span class="no-loans">—</span>'}</td>`;
+loanCols=`<td class="num td-circ">${row.totalLoans}</td><td class="td-circ" style="background:${circBg}"><span style="font-family:'DM Mono',monospace;font-size:11px;font-weight:600">${row.circRate!==null?row.circRate.toFixed(2):'—'}</span></td><td class="td-circ" style="background:${pBg}"><span style="font-family:'DM Mono',monospace;font-size:11px">${row.pctBorrowed!==null?row.pctBorrowed.toFixed(1)+'%':'—'}</span></td><td>${qd?`<span class="quad-pill" style="background:${qd.bg};color:${qd.color}">${esc(qd.label)}</span>`:'<span class="no-loans">—</span>'}</td>`;
 }
 return`<tr>
 <td class="mono">${esc(row.dewey)}</td><td>${esc(row.materia)}</td>
@@ -1244,19 +1100,12 @@ ${loanCols}
 </tr>`;
 }).join('');
 }
-
-const PRI_CONFIG={
-1:{bg:'#fdecea',color:'#8b1a1a',label:'P1'},
-2:{bg:'#fbe9e7',color:'#bf360c',label:'P2'},
-3:{bg:'#fdf3d6',color:'#8a5e00',label:'P3'},
-4:{bg:'#e3f0fc',color:'#1565c0',label:'P4'},
-5:{bg:'#f5f5f5',color:'#757575',label:'—'},
-};
-function getCurrentTitleFilter(safeCode,titles){
-const pri=document.getElementById('tf-pri-'+safeCode)?.value||'';
-const rec=document.getElementById('tf-rec-'+safeCode)?.value||'';
-const lang=document.getElementById('tf-lang-'+safeCode)?.value||'';
-const q=(document.getElementById('tf-q-'+safeCode)?.value||'').toLowerCase();
+const PRI_CONFIG={1:{bg:'#fdecea',color:'#8b1a1a',label:'P1'},2:{bg:'#fbe9e7',color:'#bf360c',label:'P2'},3:{bg:'#fdf3d6',color:'#8a5e00',label:'P3'},4:{bg:'#e3f0fc',color:'#1565c0',label:'P4'},5:{bg:'#f5f5f5',color:'#757575',label:'—'}};
+function getCurrentTitleFilter(sc,titles){
+const pri=document.getElementById('tf-pri-'+sc)?.value||'';
+const rec=document.getElementById('tf-rec-'+sc)?.value||'';
+const lang=document.getElementById('tf-lang-'+sc)?.value||'';
+const q=(document.getElementById('tf-q-'+sc)?.value||'').toLowerCase();
 return titles.filter(t=>{
 if(pri&&String(t.pri)!==pri)return false;
 if(rec&&t.rec!==rec)return false;
@@ -1265,18 +1114,18 @@ if(q&&!t.titulo.toLowerCase().includes(q)&&!t.autor.toLowerCase().includes(q)&&!
 return true;
 });
 }
-function wireTitleFilters(safeCode,titles){
+function wireTitleFilters(sc,titles){
 ['tf-pri-','tf-rec-','tf-lang-','tf-q-'].forEach(pfx=>{
-const el=document.getElementById(pfx+safeCode);
+const el=document.getElementById(pfx+sc);
 if(el)el.addEventListener('input',()=>{
-const f=getCurrentTitleFilter(safeCode,titles);
-document.getElementById('tf-info-'+safeCode).textContent=f.length+' títulos';
-renderTitleTable(safeCode,f);
+const f=getCurrentTitleFilter(sc,titles);
+document.getElementById('tf-info-'+sc).textContent=f.length+' títulos';
+renderTitleTable(sc,f);
 });
 });
 }
-function renderTitleTable(safeCode,titles){
-const tbody=document.getElementById('ttb-'+safeCode);if(!tbody)return;
+function renderTitleTable(sc,titles){
+const tbody=document.getElementById('ttb-'+sc);if(!tbody)return;
 tbody.innerHTML=titles.map(t=>{
 const pc=PRI_CONFIG[t.pri]||PRI_CONFIG[5];
 const yColor=t.isOld?'#8b1a1a':'#1e6b3a';
@@ -1296,11 +1145,11 @@ return`<tr>
 <td><span class="rec-badge" style="background:${pc.bg};color:${pc.color}">${esc(t.rec)}</span></td>
 </tr>`;
 }).join('');
-const info=document.getElementById('tf-info-'+safeCode);
+const info=document.getElementById('tf-info-'+sc);
 if(info)info.textContent=titles.length+' títulos';
 }
 
-/* ---------- EXPORTS ---------- */
+/* ---------- Exportación ---------- */
 function dlBudget(code,data){
 const titles=data._titles||[];
 if(!titles.length){alert('No hay datos de títulos para exportar.');return}
@@ -1308,33 +1157,29 @@ const wb=XLSX.utils.book_new();
 const now=new Date().toLocaleString('es-CL');
 const p1=titles.filter(t=>t.pri===1),p2=titles.filter(t=>t.pri===2);
 const p3=titles.filter(t=>t.pri===3),p4=titles.filter(t=>t.pri===4||t.pri===5);
-const sumRows=[
-['INFORME PRESUPUESTARIO — '+code],['Generado: '+now],[''],
-['RESUMEN EJECUTIVO'],[''],
+const sumRows=[['INFORME PRESUPUESTARIO — '+code],['Generado: '+now],[''],['RESUMEN EJECUTIVO'],[''],
 ['Prioridad','Categoría','N° Títulos','N° Copias afectadas','Préstamos involucrados'],
 ['P1 — URGENTE','Comprar más ejemplares + edición actualizada',p1.length,p1.reduce((a,t)=>a+t.copies,0),p1.reduce((a,t)=>a+(t.loans||0),0)],
 ['P2 — RECOMENDADO','Buscar edición actualizada / Comprar más ejemplares',p2.length,p2.reduce((a,t)=>a+t.copies,0),p2.reduce((a,t)=>a+(t.loans||0),0)],
 ['P3 — REVISAR','Candidatos a descarte / Revisar pertinencia',p3.length,p3.reduce((a,t)=>a+t.copies,0),p3.reduce((a,t)=>a+(t.loans||0),0)],
 ['P4 — SIN ACCIÓN','Mantener / Sin datos',p4.length,p4.reduce((a,t)=>a+t.copies,0),p4.reduce((a,t)=>a+(t.loans||0),0)],
-];
+[''],['NOTA: P/Copia ≥ 3 = alta demanda por copia (requiere más ejemplares)']];
 const wsSum=XLSX.utils.aoa_to_sheet(sumRows);
 wsSum['!cols']=[{wch:14},{wch:45},{wch:12},{wch:20},{wch:20}];
 XLSX.utils.book_append_sheet(wb,wsSum,'Resumen ejecutivo');
-const TH=['Signatura','Título','Autor','Idioma','Año','Copias','Préstamos','P/Copia','Estado','Recomendación','Prioridad'];
-function titleRows(arr){return arr.map(t=>[t.sig,t.titulo,t.autor,t.lang,t.year||'',t.copies,t.loans!==null?t.loans:'',t.lpc!==null?+t.lpc.toFixed(2):'',t.isOld?'Desactualizado':'Vigente',t.rec,`P${t.pri}`])}
+const TH=['Signatura','Título','Autor','Idioma','Año','Copias','Préstamos','P/Copia','Estado actualiz.','Recomendación','Prioridad'];
+const titleRows=arr=>arr.map(t=>[t.sig,t.titulo,t.autor,t.lang,t.year||'',t.copies,t.loans!==null?t.loans:'',t.lpc!==null?+t.lpc.toFixed(2):'',t.isOld?'Desactualizado':'Vigente',t.rec,`P${t.pri}`]);
 const colW=[{wch:20},{wch:52},{wch:28},{wch:9},{wch:8},{wch:8},{wch:11},{wch:9},{wch:16},{wch:42},{wch:6}];
-if(p1.length){const ws=XLSX.utils.aoa_to_sheet([['P1 — Adquirir urgente'],[],TH,...titleRows(p1)]);ws['!cols']=colW;XLSX.utils.book_append_sheet(wb,ws,'P1 — Urgente')}
-if(p2.length){const ws=XLSX.utils.aoa_to_sheet([['P2 — Recomendado'],[],TH,...titleRows(p2)]);ws['!cols']=colW;XLSX.utils.book_append_sheet(wb,ws,'P2 — Recomendado')}
-if(p3.length){const ws=XLSX.utils.aoa_to_sheet([['P3 — Revisar'],[],TH,...titleRows(p3)]);ws['!cols']=colW;XLSX.utils.book_append_sheet(wb,ws,'P3 — Revisar')}
+if(p1.length){const ws=XLSX.utils.aoa_to_sheet([['P1 — Adquirir urgente: más ejemplares + edición actualizada'],[],TH,...titleRows(p1)]);ws['!cols']=colW;XLSX.utils.book_append_sheet(wb,ws,'P1 — Urgente')}
+if(p2.length){const ws=XLSX.utils.aoa_to_sheet([['P2 — Recomendado: actualizar edición o ampliar ejemplares'],[],TH,...titleRows(p2)]);ws['!cols']=colW;XLSX.utils.book_append_sheet(wb,ws,'P2 — Recomendado')}
+if(p3.length){const ws=XLSX.utils.aoa_to_sheet([['P3 — Revisar: candidatos a descarte o sin uso'],[],TH,...titleRows(p3)]);ws['!cols']=colW;XLSX.utils.book_append_sheet(wb,ws,'P3 — Revisar·Descartar')}
 const wsAll=XLSX.utils.aoa_to_sheet([['Todos los títulos — '+code],['Generado: '+now],[],TH,...titleRows(titles)]);
 wsAll['!cols']=colW;
 XLSX.utils.book_append_sheet(wb,wsAll,'Todos los títulos');
 XLSX.writeFile(wb,`Informe_Presupuestario_${code}_${new Date().getFullYear()}.xlsx`);
 }
-
 function buildSheets(code,data){
-const h1=['Código Dewey','Materia','N Ejemplares','Año mín','Año máx','Mediana','Promedio','Corte','% ant. corte','Estado','Semivida','I. Obsolescencia','% Inglés',
-...(hasLoans?['Préstamos','Ítems prestados','Tasa circulación','% ítems prestados','Decisión']:[] )];
+const h1=['Código Dewey','Materia','N Ejemplares','Año mín','Año máx','Mediana','Promedio','Corte','% ant. corte','Estado','Semivida (años)','I. Obsolescencia','% Inglés',...(hasLoans?['Préstamos totales','Ítems prestados','Tasa circulación','% ítems prestados','Decisión']:[])];
 const r1=data.map(r=>{
 const e=r.pct===null?'Sin dato':r.pct<=30?'Actualizado':r.pct<=70?'Moderado':'Desactualizado';
 const qd=hasLoans?getQuadrant(r):null;
@@ -1342,44 +1187,50 @@ const loanCols=hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?+r.circR
 return[r.dewey,r.materia,r.n,r.yMin||'',r.yMax||'',r.med||'',r.avg?+r.avg.toFixed(1):'',r.corte,r.pct!==null?+(r.pct/100).toFixed(4):'',e,r.hl!==null?r.hl:'',r.iObs!==null?+(r.iObs/100).toFixed(4):'',r.pctIngles!==null?+(r.pctIngles/100).toFixed(4):'',...loanCols];
 });
 r1.push(new Array(h1.length).fill(''));r1[r1.length-1][0]='TOTAL';r1[r1.length-1][2]=data.reduce((a,b)=>a+b.n,0);
-const ws1=XLSX.utils.aoa_to_sheet([[`Análisis — ${code}`],[`Generado: ${new Date().toLocaleString('es-CL')}`],[],h1,...r1]);
+const ws1=XLSX.utils.aoa_to_sheet([[`Análisis de Colección — ${code}`],[`Generado: ${new Date().toLocaleString('es-CL')}`],[],h1,...r1]);
 const colW=[{wch:11},{wch:38},{wch:11},{wch:9},{wch:9},{wch:9},{wch:9},{wch:10},{wch:13},{wch:14},{wch:13},{wch:14},{wch:11},...(hasLoans?[{wch:14},{wch:14},{wch:14},{wch:14},{wch:22}]:[])];
 ws1['!cols']=colW;
+for(let i=4;i<4+r1.length;i++){
+let c=XLSX.utils.encode_cell({r:i,c:8});if(ws1[c]&&typeof ws1[c].v==='number')ws1[c].z='0.0%';
+c=XLSX.utils.encode_cell({r:i,c:11});if(ws1[c]&&typeof ws1[c].v==='number')ws1[c].z='0.0%';
+c=XLSX.utils.encode_cell({r:i,c:12});if(ws1[c]&&typeof ws1[c].v==='number')ws1[c].z='0.0%';
+if(hasLoans){c=XLSX.utils.encode_cell({r:i,c:16});if(ws1[c]&&typeof ws1[c].v==='number')ws1[c].z='0.0%'}
+}
 const h2=['Código Dewey','Materia','Total',...DECADAS.map(d=>d+'s')];
 const r2=data.map(r=>[r.dewey,r.materia,r.n,...DECADAS.map(d=>r.dc[d]||0)]);
 r2.push(['TOTAL','',data.reduce((a,b)=>a+b.n,0),...DECADAS.map(d=>data.reduce((a,r)=>a+(r.dc[d]||0),0))]);
 const ws2=XLSX.utils.aoa_to_sheet([[`Por Décadas — ${code}`],[],h2,...r2]);
 ws2['!cols']=[{wch:11},{wch:38},{wch:8},...DECADAS.map(()=>({wch:8}))];
-return{ws1,ws2};
+const hC=['Rango Dewey','Descripción','Año de corte','HL Ref. (años)','Fundamento'];
+const rC=cutoffRules.map(r=>[r.label,r.desc,r.year,getHLRef(String(r.from).padStart(3,'0')),r.why]);
+const wsC=XLSX.utils.aoa_to_sheet([['Criterios aplicados'],[],hC,...rC]);
+wsC['!cols']=[{wch:12},{wch:34},{wch:12},{wch:14},{wch:50}];
+return{ws1,ws2,wsC};
 }
 function dlExcel(code,data){
 const wb=XLSX.utils.book_new();
-const{ws1,ws2}=buildSheets(code,data);
+const{ws1,ws2,wsC}=buildSheets(code,data);
 XLSX.utils.book_append_sheet(wb,ws1,'Análisis por Materia');
 XLSX.utils.book_append_sheet(wb,ws2,'Por Década');
+XLSX.utils.book_append_sheet(wb,wsC,'Criterios');
 XLSX.writeFile(wb,`Coleccion_${code}_${CY}.xlsx`);
 }
 function dlCSV(code,data){
-const h=['Carrera','Dewey','Materia','N','Anio_min','Anio_max','Mediana','Corte','Pct_ant_corte','Estado','Semivida','I_Obsolescencia','Pct_ingles',...(hasLoans?['Prestamos','Items_prestados','Tasa_circ','Pct_prestados','Decision']:[])];
+const h=['Carrera','Dewey','Materia','N','Anio_min','Anio_max','Mediana','Corte','Pct_ant_corte','Estado','Semivida_anios','I_Obsolescencia','Pct_ingles',...(hasLoans?['Prestamos','Items_prestados','Tasa_circ','Pct_prestados','Decision']:[])];
 const rows=data.map(r=>{
 const e=r.pct===null?'Sin dato':r.pct<=30?'Actualizado':r.pct<=70?'Moderado':'Desactualizado';
 const qd=hasLoans?getQuadrant(r):null;
-return[code,r.dewey,`"${String(r.materia).replace(/"/g,'""')}"`,r.n,r.yMin||'',r.yMax||'',r.med||'',r.corte,
-r.pct!==null?r.pct.toFixed(1):'',e,r.hl!==null?r.hl:'',r.iObs!==null?r.iObs.toFixed(1):'',
-r.pctIngles!==null?r.pctIngles.toFixed(1):'',
-...(hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?r.circRate.toFixed(2):'',r.pctBorrowed!==null?r.pctBorrowed.toFixed(1):'',qd?qd.label.replace(/[🔴🟢🟡🔵]/g,'').trim():'']:[] )];
+return[code,r.dewey,`"${String(r.materia).replace(/"/g,'""')}"`,r.n,r.yMin||'',r.yMax||'',r.med||'',r.corte,r.pct!==null?r.pct.toFixed(1):'',e,r.hl!==null?r.hl:'',r.iObs!==null?r.iObs.toFixed(1):'',r.pctIngles!==null?r.pctIngles.toFixed(1):'',...(hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?r.circRate.toFixed(2):'',r.pctBorrowed!==null?r.pctBorrowed.toFixed(1):'',qd?qd.label.replace(/[🔴🟢🟡🔵]/g,'').trim():'']:[] )];
 });
 const csv=[h,...rows].map(r=>r.join(',')).join('\n');
 const a=document.createElement('a');
 a.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));
 a.download=`Coleccion_${code}.csv`;a.click();
 }
-
 document.getElementById('dl-all-excel').addEventListener('click',()=>{
 const title=document.getElementById('report-title').value.trim()||'Colecciones';
 const wb=XLSX.utils.book_new();
-const sh=['Carrera','Ejemplares','Clases Dewey','Mediana','% ant. corte','Semivida','% Inglés',
-...(hasLoans?['Préstamos','Ítems nunca prestados','Q1','Q2','Q3','Q4']:[] )];
+const sh=['Carrera','Ejemplares','Clases Dewey','Mediana','% ant. corte','Semivida (años)','% Inglés',...(hasLoans?['Préstamos totales','Ítems nunca prestados','Adquisición urgente (Q1)','Mantener (Q2)','Evaluar descarte (Q3)','Revisar pertinencia (Q4)']:[])];
 const sr=Object.entries(allResults).map(([code,data])=>{
 const av=data.flatMap(r=>r.valid).sort((a,b)=>a-b);
 const med=av.length?av[Math.floor(av.length/2)]:'';
@@ -1393,34 +1244,29 @@ const base=[code,data.reduce((a,b)=>a+b.n,0),data.length,med,pct,gHL!==null?gHL:
 if(hasLoans){
 const totL=data.reduce((a,r)=>a+r.totalLoans,0);
 const neverB=data.reduce((a,r)=>a+(r.n-r.itemsBorrowed),0);
-return[...base,totL,neverB,
-data.filter(r=>getQuadrant(r)?.q===1).length,data.filter(r=>getQuadrant(r)?.q===2).length,
-data.filter(r=>getQuadrant(r)?.q===3).length,data.filter(r=>getQuadrant(r)?.q===4).length];
+return[...base,totL,neverB,data.filter(r=>getQuadrant(r)?.q===1).length,data.filter(r=>getQuadrant(r)?.q===2).length,data.filter(r=>getQuadrant(r)?.q===3).length,data.filter(r=>getQuadrant(r)?.q===4).length];
 }
 return base;
 });
 const wsS=XLSX.utils.aoa_to_sheet([[`Resumen — ${title}`],[`${new Date().toLocaleString('es-CL')}`],[],sh,...sr]);
-wsS['!cols']=[{wch:12},{wch:11},{wch:12},{wch:10},{wch:13},{wch:13},...(hasLoans?[{wch:14},{wch:18},{wch:8},{wch:8},{wch:8},{wch:8}]:[])];
+wsS['!cols']=[{wch:12},{wch:11},{wch:12},{wch:10},{wch:13},{wch:13},...(hasLoans?[{wch:14},{wch:18},{wch:20},{wch:14},{wch:18},{wch:20}]:[])];
+for(let i=4;i<4+sr.length;i++){const c=XLSX.utils.encode_cell({r:i,c:4});if(wsS[c]&&typeof wsS[c].v==='number')wsS[c].z='0.0%'}
 XLSX.utils.book_append_sheet(wb,wsS,'Resumen General');
-for(const [code,data] of Object.entries(allResults)){
+for(const[code,data]of Object.entries(allResults)){
 const{ws1,ws2}=buildSheets(code,data);
 XLSX.utils.book_append_sheet(wb,ws1,code.substring(0,25)+'-Mat');
 XLSX.utils.book_append_sheet(wb,ws2,code.substring(0,25)+'-Dec');
 }
 XLSX.writeFile(wb,`Analisis_${title.replace(/\s+/g,'_')}_${CY}.xlsx`);
 });
-
 document.getElementById('dl-all-csv').addEventListener('click',()=>{
-const h=['Carrera','Dewey','Materia','N','Anio_min','Anio_max','Mediana','Corte','Pct_ant_corte','Estado','Semivida','I_Obsolescencia','Pct_ingles',...(hasLoans?['Prestamos','Items_prestados','Tasa_circ','Pct_prestados','Decision']:[])];
+const h=['Carrera','Dewey','Materia','N','Anio_min','Anio_max','Mediana','Corte','Pct_ant_corte','Estado','Semivida_anios','I_Obsolescencia','Pct_ingles',...(hasLoans?['Prestamos','Items_prestados','Tasa_circ','Pct_prestados','Decision']:[])];
 const rows=[];
-for(const [code,data] of Object.entries(allResults)){
+for(const[code,data]of Object.entries(allResults)){
 for(const r of data){
 const e=r.pct===null?'Sin dato':r.pct<=30?'Actualizado':r.pct<=70?'Moderado':'Desactualizado';
 const qd=hasLoans?getQuadrant(r):null;
-rows.push([code,r.dewey,`"${String(r.materia).replace(/"/g,'""')}"`,r.n,r.yMin||'',r.yMax||'',r.med||'',r.corte,
-r.pct!==null?r.pct.toFixed(1):'',e,r.hl!==null?r.hl:'',r.iObs!==null?r.iObs.toFixed(1):'',
-r.pctIngles!==null?r.pctIngles.toFixed(1):'',
-...(hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?r.circRate.toFixed(2):'',r.pctBorrowed!==null?r.pctBorrowed.toFixed(1):'',qd?qd.label.replace(/[🔴🟢🟡🔵]/g,'').trim():'']:[] )]);
+rows.push([code,r.dewey,`"${String(r.materia).replace(/"/g,'""')}"`,r.n,r.yMin||'',r.yMax||'',r.med||'',r.corte,r.pct!==null?r.pct.toFixed(1):'',e,r.hl!==null?r.hl:'',r.iObs!==null?r.iObs.toFixed(1):'',r.pctIngles!==null?r.pctIngles.toFixed(1):'',...(hasLoans?[r.totalLoans,r.itemsBorrowed,r.circRate!==null?r.circRate.toFixed(2):'',r.pctBorrowed!==null?r.pctBorrowed.toFixed(1):'',qd?qd.label.replace(/[🔴🟢🟡🔵]/g,'').trim():'']:[] )]);
 }
 }
 const csv=[h,...rows].map(r=>r.join(',')).join('\n');
@@ -1429,16 +1275,12 @@ a.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8
 a.download='Analisis_consolidado.csv';a.click();
 });
 
-/* ---------- ALERTS ---------- */
+/* ---------- Alerts ---------- */
 function showAlert(msg,type){const el=document.getElementById('alert-box');el.textContent=msg;el.className='alert '+type;el.style.display='block'}
 function hideAlert(){document.getElementById('alert-box').style.display='none'}
 
-/* ---------- INIT ---------- */
-document.addEventListener('DOMContentLoaded',()=>{
-    buildCutoffGrid();
-    console.log('✓ Analizador inicializado. Año actual:',CY);
-});
-// Fallback: si DOMContentLoaded ya pasó
+/* ---------- Init ---------- */
+document.addEventListener('DOMContentLoaded',()=>{buildCutoffGrid()});
 if(document.readyState!=='loading')buildCutoffGrid();
 </script>
 </body>
